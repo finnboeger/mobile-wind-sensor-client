@@ -47,63 +47,70 @@ def init_gps(control_console: serial.Serial, output_console: serial.Serial) -> N
 async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> None:
     time_ms = int(time.time() * 1000)
 
+    bufsize = 1024
     sid = 0
     while True:
-        raw_data = console.read_until("\r\n")
         # TODO: probably read all at once so that we can properly create the n2k messages :/
+        # raw_data = console.read_until("\r\n")
+
+        raw_data = b""
+        while raw_data[-2:] != b"\r\n":
+            raw_data += console.read(bufsize)
 
         try:
             data = raw_data.decode()
         except UnicodeDecodeError as e:
             print(e)
             continue
-        parsed = pynmea2.parse(data)
-        if isinstance(parsed, pynmea2.GSV):
-            # GNSS Satellites in view http://www.nmea.de/nmea0183datensaetze.html#gsv
-            pass
-        elif isinstance(parsed, pynmea2.GGA):
-            # GNSS Position fix http://www.nmea.de/nmea0183datensaetze.html#gga
-            # TODO: check if seconds since midnight is UTC or timezone specific
-            # TODO: unknown which format timestamp is
-            msg = n2k.messages.set_n2k_gnss_data(
-                sid=sid,
-                days_since_1970=int(parsed["timestamp"] // (60*60*24)),
-                seconds_since_midnight=float(parsed["timestamp"] % 86400),
-                latitude=float(parsed["lat"]) * 1 if parsed["lat_dir"] == "N" else -1,
-                longitude=float(parsed["lon"]) * 1 if parsed["lon_dir"] == "E" else -1,
-                altitude=float(parsed["alt"]),
-                gnss_type=n2k.types.N2kGNSSType(0),
-                gnss_method=n2k.types.N2kGNSSMethod(1),
-                n_satellites=int(parsed["num_sats"]),
-                hdop=float(parsed["horizontal_dil"]),
-                pdop=float(0),
-                geoidal_separation=float(parsed["geo_sep"]),
-                n_reference_station=0,  # TODO: pass along reference station
-                reference_station_type=None,
-                reference_station_id=None,
-                age_of_correction=None,
-            )
-            q.put(msg)
-        elif isinstance(parsed, pynmea2.VTG):
-            # GNSS Speed over Ground http://www.nmea.de/nmea0183datensaetze.html#vtg
-            # increase our sid every time we come across this kind of message as it seems to start each group and
-            # is only send once
-            sid = (sid + 1) % 250  # not sure if 255 is reserved therefore we roll over beforehand
-        elif isinstance(parsed, pynmea2.RMC):
-            # GNSS combined position, movement, time data,
-            # also contains compass declination http://www.nmea.de/nmea0183datensaetze.html#rmc
-            msg = n2k.messages.set_n2k_cog_sog_rapid(
-                sid=sid,
-                heading_reference=n2k.types.N2kHeadingReference(0),  # degrees true
-                cog=n2k.utils.deg_to_rad(float(parsed["true_course"])),
-                sog=n2k.utils.knots_to_meters_per_second(float(parsed["spd_over_grnd"])),
-            )
-            q.put(msg)
-        elif isinstance(parsed, pynmea2.GSA):
-            # GNSS Dilution of Precision data http://www.nmea.de/nmea0183datensaetze.html#gsa
-            pass
-        else:
-            raise Exception("Unknown message:" + repr(parsed))
+        data = [x for x in data.split("\r\n") if x is not None and len(x) > 0]
+        parsed = [pynmea2.parse(d) for d in data]
+        for sentence in parsed:
+            if isinstance(sentence, pynmea2.GSV):
+                # GNSS Satellites in view http://www.nmea.de/nmea0183datensaetze.html#gsv
+                pass
+            elif isinstance(sentence, pynmea2.GGA):
+                # GNSS Position fix http://www.nmea.de/nmea0183datensaetze.html#gga
+                # TODO: check if seconds since midnight is UTC or timezone specific
+                # TODO: unknown which format timestamp is
+                msg = n2k.messages.set_n2k_gnss_data(
+                    sid=sid,
+                    days_since_1970=int(sentence["timestamp"] // (60*60*24)),
+                    seconds_since_midnight=float(sentence["timestamp"] % 86400),
+                    latitude=float(sentence["lat"]) * 1 if sentence["lat_dir"] == "N" else -1,
+                    longitude=float(sentence["lon"]) * 1 if sentence["lon_dir"] == "E" else -1,
+                    altitude=float(sentence["alt"]),
+                    gnss_type=n2k.types.N2kGNSSType(0),
+                    gnss_method=n2k.types.N2kGNSSMethod(1),
+                    n_satellites=int(sentence["num_sats"]),
+                    hdop=float(sentence["horizontal_dil"]),
+                    pdop=float(0),
+                    geoidal_separation=float(sentence["geo_sep"]),
+                    n_reference_station=0,  # TODO: pass along reference station
+                    reference_station_type=None,
+                    reference_station_id=None,
+                    age_of_correction=None,
+                )
+                q.put(msg)
+            elif isinstance(sentence, pynmea2.VTG):
+                # GNSS Speed over Ground http://www.nmea.de/nmea0183datensaetze.html#vtg
+                # increase our sid every time we come across this kind of message as it seems to start each group and
+                # is only send once
+                sid = (sid + 1) % 250  # not sure if 255 is reserved therefore we roll over beforehand
+            elif isinstance(sentence, pynmea2.RMC):
+                # GNSS combined position, movement, time data,
+                # also contains compass declination http://www.nmea.de/nmea0183datensaetze.html#rmc
+                msg = n2k.messages.set_n2k_cog_sog_rapid(
+                    sid=sid,
+                    heading_reference=n2k.types.N2kHeadingReference(0),  # degrees true
+                    cog=n2k.utils.deg_to_rad(float(sentence["true_course"])),
+                    sog=n2k.utils.knots_to_meters_per_second(float(sentence["spd_over_grnd"])),
+                )
+                q.put(msg)
+            elif isinstance(sentence, pynmea2.GSA):
+                # GNSS Dilution of Precision data http://www.nmea.de/nmea0183datensaetze.html#gsa
+                pass
+            else:
+                raise Exception("Unknown message:" + repr(sentence))
 
 
 def combine_forces(angle1: float, force1: float, angle2: float, force2: float) -> (float, float):
