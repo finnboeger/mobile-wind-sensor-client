@@ -139,6 +139,8 @@ class Handler(n2k.MessageHandler):
     pos_send_queue: multiprocessing.Queue
     pos_recv_queue: multiprocessing.Queue
     compass_heading: float = 0.0
+    speed: float = 0.0
+    heading: float = 0.0
 
     def __init__(self,
                  node: n2k.Node,
@@ -148,6 +150,16 @@ class Handler(n2k.MessageHandler):
         self.pos_send_queue = pos_send_queue
         self.pos_recv_queue = pos_recv_queue
 
+    def using_previous_data(self, msg: n2k.Message) -> None:
+        wind_data = n2k.messages.parse_n2k_wind_speed(msg)
+        twd, tws = combine_forces(wind_data.wind_angle, wind_data.wind_speed, self.heading, -self.speed)
+        self._node.send_msg(n2k.messages.set_n2k_wind_speed(
+            sid=wind_data.sid,
+            wind_speed=tws,
+            wind_angle=twd,
+            wind_reference=n2k.types.N2kWindReference(0),
+        ))
+
     def handle_msg(self, msg: n2k.Message) -> None:
         if not (msg.pgn == n2k.PGN.WindSpeed or msg.pgn == n2k.PGN.VesselHeading):
             return
@@ -155,10 +167,24 @@ class Handler(n2k.MessageHandler):
         # TODO: basically everything, message flow is weird at the moment
 
         if msg.pgn == n2k.PGN.WindSpeed:
-            speed_data = self.pos_recv_queue.get()
-            gnss_data = self.pos_recv_queue.get()
+            try:
+                speed_data = self.pos_recv_queue.get(False, 0.1)
+            except Exception:
+                self.using_previous_data(msg)
+                return
+            try:
+                gnss_data = self.pos_recv_queue.get(False, 0.1)
+            except Exception:
+                self.using_previous_data(msg)
+                return
+            self._node.send_msg(speed_data)
+            self._node.send_msg(gnss_data)
             if speed_data.pgn != n2k.PGN.CogSogRapid and gnss_data.pgn == n2k.PGN.CogSogRapid:
                 speed_data, gnss_data = gnss_data, speed_data
+            elif speed_data.pgn != n2k.PGN.CogSogRapid and gnss_data.pgn != n2k.PGN.CogSogRapid:
+                print("both messages arent speed data")
+                self.using_previous_data(msg)
+                return
             wind_data = n2k.messages.parse_n2k_wind_speed(msg)
             movement_data = n2k.messages.parse_n2k_cog_sog_rapid(speed_data)
             twd, tws = combine_forces(wind_data.wind_angle, wind_data.wind_speed, movement_data.cog, -movement_data.sog)
