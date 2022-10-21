@@ -1,7 +1,7 @@
 import configparser
 from enum import Enum
 from multiprocessing import Queue
-from typing import List, Iterable
+from typing import List, Iterable, Union
 
 import paho.mqtt.client as mqtt
 import struct
@@ -47,7 +47,7 @@ if "MQTT" in config:
             pass
 
 
-def avg(iterable: Iterable[float | int]) -> float:
+def avg(iterable: Iterable[Union[float, int]]) -> float:
     length = 0
     counter = 0
 
