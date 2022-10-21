@@ -72,6 +72,8 @@ async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> No
                 # GNSS Position fix http://www.nmea.de/nmea0183datensaetze.html#gga
                 # TODO: check if seconds since midnight is UTC or timezone specific
                 # TODO: unknown which format timestamp is
+                if sentence.timestamp is None:
+                    continue
                 msg = n2k.messages.set_n2k_gnss_data(
                     sid=sid,
                     days_since_1970=int(sentence.timestamp // (60*60*24)),
@@ -99,6 +101,8 @@ async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> No
             elif isinstance(sentence, pynmea2.RMC):
                 # GNSS combined position, movement, time data,
                 # also contains compass declination http://www.nmea.de/nmea0183datensaetze.html#rmc
+                if sentence.true_course is None:
+                    continue
                 msg = n2k.messages.set_n2k_cog_sog_rapid(
                     sid=sid,
                     heading_reference=n2k.types.N2kHeadingReference(0),  # degrees true
