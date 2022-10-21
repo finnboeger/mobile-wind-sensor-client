@@ -165,6 +165,8 @@ class Handler(n2k.MessageHandler):
             return
 
         # TODO: basically everything, message flow is weird at the moment
+        #       especially remove dependency on frequency / order of messages
+        #       it shouldn't matter if more position or more wind data arrives and in which order the gps is
 
         if msg.pgn == n2k.PGN.WindSpeed:
             try:
