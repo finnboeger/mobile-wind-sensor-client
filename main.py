@@ -167,7 +167,7 @@ if __name__ == "__main__":
     with serial.Serial("/dev/ttyUSB1", 115200, timeout=0, rtscts=True, dsrdtr=True) as gps_console, \
             serial.Serial("/dev/ttyUSB2", 115200, timeout=0, rtscts=True, dsrdtr=True) as sim7000control:
         # Initialize connection with GPS module and wait for first fix
-        init_gps(gps_console, sim7000control)
+        init_gps(sim7000control, gps_console)
 
         # Setup position calculation
         position_send_queue = multiprocessing.Queue()
