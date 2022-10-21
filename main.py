@@ -74,17 +74,17 @@ async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> No
                 # TODO: unknown which format timestamp is
                 msg = n2k.messages.set_n2k_gnss_data(
                     sid=sid,
-                    days_since_1970=int(sentence["timestamp"] // (60*60*24)),
-                    seconds_since_midnight=float(sentence["timestamp"] % 86400),
-                    latitude=float(sentence["lat"]) * 1 if sentence["lat_dir"] == "N" else -1,
-                    longitude=float(sentence["lon"]) * 1 if sentence["lon_dir"] == "E" else -1,
-                    altitude=float(sentence["alt"]),
+                    days_since_1970=int(sentence.timestamp // (60*60*24)),
+                    seconds_since_midnight=float(sentence.timestamp % 86400),
+                    latitude=float(sentence.lat) * 1 if sentence.lat_dir == "N" else -1,
+                    longitude=float(sentence.lon) * 1 if sentence.lon_dir == "E" else -1,
+                    altitude=float(sentence.alt),
                     gnss_type=n2k.types.N2kGNSSType(0),
                     gnss_method=n2k.types.N2kGNSSMethod(1),
-                    n_satellites=int(sentence["num_sats"]),
-                    hdop=float(sentence["horizontal_dil"]),
+                    n_satellites=int(sentence.num_sats),
+                    hdop=float(sentence.horizontal_dil),
                     pdop=float(0),
-                    geoidal_separation=float(sentence["geo_sep"]),
+                    geoidal_separation=float(sentence.geo_sep),
                     n_reference_station=0,  # TODO: pass along reference station
                     reference_station_type=None,
                     reference_station_id=None,
@@ -102,8 +102,8 @@ async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> No
                 msg = n2k.messages.set_n2k_cog_sog_rapid(
                     sid=sid,
                     heading_reference=n2k.types.N2kHeadingReference(0),  # degrees true
-                    cog=n2k.utils.deg_to_rad(float(sentence["true_course"])),
-                    sog=n2k.utils.knots_to_meters_per_second(float(sentence["spd_over_grnd"])),
+                    cog=n2k.utils.deg_to_rad(float(sentence.true_course)),
+                    sog=n2k.utils.knots_to_meters_per_second(float(sentence.spd_over_grnd)),
                 )
                 q.put(msg)
             elif isinstance(sentence, pynmea2.GSA):
