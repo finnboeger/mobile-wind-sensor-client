@@ -1,6 +1,7 @@
 # import sys
 # sys.path.insert(0, "../n2k")
 import math
+import threading
 
 import pynmea2
 import serial
@@ -15,7 +16,7 @@ import mqtt
 import position
 
 
-COMPASS_OFFSET = 0  # positive: north of the measurement unit is offset clockwise from the compass north
+COMPASS_OFFSET = 0  # positive: north of the measurement unit is offset clockwise from the compass north. In degrees
 
 
 # TODO: rework init
@@ -44,7 +45,7 @@ def init_gps(control_console: serial.Serial, output_console: serial.Serial) -> N
                 return
 
 
-async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> None:
+def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> None:
     time_ms = int(time.time() * 1000)
 
     bufsize = 1024
@@ -170,32 +171,44 @@ class Handler(n2k.MessageHandler):
         #       it shouldn't matter if more position or more wind data arrives and in which order the gps is
 
         if msg.pgn == n2k.PGN.WindSpeed:
-            try:
-                speed_data = self.pos_recv_queue.get(False, 0.1)
-            except Exception:
-                self.using_previous_data(msg)
-                return
-            try:
-                gnss_data = self.pos_recv_queue.get(False, 0.1)
-            except Exception:
-                self.using_previous_data(msg)
-                return
-            self._node.send_msg(speed_data)
-            self._node.send_msg(gnss_data)
-            if speed_data.pgn != n2k.PGN.CogSogRapid and gnss_data.pgn == n2k.PGN.CogSogRapid:
-                speed_data, gnss_data = gnss_data, speed_data
-            elif speed_data.pgn != n2k.PGN.CogSogRapid and gnss_data.pgn != n2k.PGN.CogSogRapid:
-                print("both messages arent speed data")
-                self.using_previous_data(msg)
-                return
+            # TODO: discard NaN Values when parsing messages
             wind_data = n2k.messages.parse_n2k_wind_speed(msg)
-            movement_data = n2k.messages.parse_n2k_cog_sog_rapid(speed_data)
+            if wind_data.wind_reference != n2k.types.N2kWindReference(2):
+                return
+            if wind_data.wind_speed > 200:
+                # obviously false value
+                return
+            data = None
+            try:
+                while True:
+                    data = self.pos_recv_queue.get_nowait()
+                    self._node.send_msg(data)
+                    if data.pgn == n2k.PGN.CogSogRapid:
+                        break
+            except Exception:
+                self.using_previous_data(msg)
+                return
+            if data is None or data.pgn != n2k.PGN.CogSogRapid:
+                self.using_previous_data(msg)
+                return
+            movement_data = n2k.messages.parse_n2k_cog_sog_rapid(data)
+            if None in [wind_data.wind_angle, wind_data.wind_speed, movement_data.cog, movement_data.sog]:
+                return
+            aws = wind_data.wind_speed
+            # TODO: calculate true heading using magnetic deviation and use that
+            awd = math.radians(math.degrees(wind_data.wind_angle + self.compass_heading) % 360 + COMPASS_OFFSET)
             twd, tws = combine_forces(wind_data.wind_angle, wind_data.wind_speed, movement_data.cog, -movement_data.sog)
             self._node.send_msg(n2k.messages.set_n2k_wind_speed(
                 sid=wind_data.sid,
                 wind_speed=tws,
                 wind_angle=twd,
                 wind_reference=n2k.types.N2kWindReference(0),
+            ))
+            self._node.send_msg(n2k.messages.set_n2k_wind_speed(
+                sid=wind_data.sid,
+                wind_speed=aws,
+                wind_angle=awd,
+                wind_reference=n2k.types.N2kWindReference(2),
             ))
 
         if msg.pgn == n2k.PGN.VesselHeading:
@@ -218,7 +231,8 @@ if __name__ == "__main__":
         position_process.start()
 
         # Setup GPS input
-        asyncio.run(gps_listener(gps_console, position_send_queue))
+        gps_thread = threading.Thread(target=gps_listener, args=(gps_console, position_send_queue))
+        gps_thread.start()
 
         # Setup mqtt sending
         # TODO: set max size -> check if queue is full before put and removing first item if so

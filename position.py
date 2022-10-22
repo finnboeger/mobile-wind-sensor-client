@@ -1,5 +1,7 @@
 from multiprocessing import Queue
 
+import n2k
+
 
 def worker(recv: Queue, send: Queue) -> None:
     # TODO: setup imu
@@ -9,4 +11,6 @@ def worker(recv: Queue, send: Queue) -> None:
         # TODO: get complete fifo from imu
         # TODO: calculate attitude, heading, and filter positional data (position, speed, direction)
         #       send calculated data n times per second
-        send.put(recv.get())
+        msg: n2k.Message = recv.get()
+        if msg.pgn != n2k.PGN.VesselHeading:
+            send.put(msg)
