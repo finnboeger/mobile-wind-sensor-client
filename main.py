@@ -71,13 +71,13 @@ async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> No
             elif isinstance(sentence, pynmea2.GGA):
                 # GNSS Position fix http://www.nmea.de/nmea0183datensaetze.html#gga
                 # TODO: check if seconds since midnight is UTC or timezone specific
-                # TODO: unknown which format timestamp is
                 if sentence.timestamp is None:
                     continue
+                timestamp = (sentence.timestamp.hour * 60 + sentence.timestamp.minute) * 60 + sentence.timestamp.second
                 msg = n2k.messages.set_n2k_gnss_data(
                     sid=sid,
-                    days_since_1970=int(sentence.timestamp // (60*60*24)),
-                    seconds_since_midnight=float(sentence.timestamp % 86400),
+                    days_since_1970=int(time.time() // (60*60*24)),
+                    seconds_since_midnight=float(timestamp),
                     latitude=float(sentence.lat) * 1 if sentence.lat_dir == "N" else -1,
                     longitude=float(sentence.lon) * 1 if sentence.lon_dir == "E" else -1,
                     altitude=float(sentence.alt),
