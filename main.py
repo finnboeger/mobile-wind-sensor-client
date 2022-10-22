@@ -74,13 +74,14 @@ async def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> No
                 if sentence.timestamp is None:
                     continue
                 timestamp = (sentence.timestamp.hour * 60 + sentence.timestamp.minute) * 60 + sentence.timestamp.second
+                print(float(sentence.lat) / 100, float(sentence.lon) / 100)
                 msg = n2k.messages.set_n2k_gnss_data(
                     sid=sid,
                     days_since_1970=int(time.time() // (60*60*24)),
                     seconds_since_midnight=float(timestamp),
-                    latitude=float(sentence.lat) * 1 if sentence.lat_dir == "N" else -1,
-                    longitude=float(sentence.lon) * 1 if sentence.lon_dir == "E" else -1,
-                    altitude=float(sentence.alt),
+                    latitude=float(sentence.lat) / 100 * 1 if sentence.lat_dir == "N" else -1,
+                    longitude=float(sentence.lon) / 100 * 1 if sentence.lon_dir == "E" else -1,
+                    altitude=float(sentence.altitude),
                     gnss_type=n2k.types.N2kGNSSType(0),
                     gnss_method=n2k.types.N2kGNSSMethod(1),
                     n_satellites=int(sentence.num_sats),

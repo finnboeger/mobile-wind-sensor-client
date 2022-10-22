@@ -104,7 +104,7 @@ def worker(recv: Queue) -> None:
         client.publish(TOPIC + "/t",
                        struct.pack(
                            "!QHH",
-                           msg.time_ms//1000,
+                           msg.time_ms // 1000,
                            int(msg.true_wind_speed / 0.01),
                            int(msg.true_wind_direction / 0.0001)),
                        qos=QOS)
