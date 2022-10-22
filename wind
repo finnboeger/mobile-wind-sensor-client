@@ -1,0 +1,25 @@
+#! /bin/sh
+# Init script for /etc/init.d/wind
+
+case "$1" in
+    start)
+        echo "noip wird gestartet"
+        # Starte Programm
+        python /home/pi/ttlappalainen/python/thesis/main.py
+        ;;
+    stop)
+        echo "noip wird beendet"
+        # Beende Programm
+        killall python
+        ;;
+    *)
+        echo "Benutzt: /etc/init.d/wind {start|stop}"
+        exit 1
+        ;;
+esac
+
+exit 0
+
+
+# /etc/rc.local:
+# python /home/pi/ttlappalainen/python/thesis/main.py &
