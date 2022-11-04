@@ -16,7 +16,7 @@ import mqtt
 import position
 
 
-COMPASS_OFFSET = 0  # positive: north of the measurement unit is offset clockwise from the compass north. In degrees
+COMPASS_OFFSET = 90  # positive: north of the measurement unit is offset clockwise from the compass north. In degrees
 
 
 # TODO: rework init
