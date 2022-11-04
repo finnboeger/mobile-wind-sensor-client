@@ -172,7 +172,7 @@ class Handler(n2k.MessageHandler):
 
     def using_previous_data(self, msg: n2k.Message) -> None:
         wind_data = n2k.messages.parse_n2k_wind_speed(msg)
-        awd = math.radians(math.degrees(wind_data.wind_angle + self.compass_heading) % 360 + COMPASS_OFFSET)
+        awd = math.radians(math.degrees(wind_data.wind_angle + self.compass_heading) + COMPASS_OFFSET) % math.tau
         aws = wind_data.wind_speed
         self.send(wind_data.sid, awd, aws)
 
@@ -210,7 +210,7 @@ class Handler(n2k.MessageHandler):
                 return
             aws = wind_data.wind_speed
             # TODO: calculate true heading using magnetic deviation and use that
-            awd = math.radians(math.degrees(wind_data.wind_angle + self.compass_heading) % 360 + COMPASS_OFFSET)
+            awd = math.radians(math.degrees(wind_data.wind_angle + self.compass_heading) + COMPASS_OFFSET) % math.tau
             self.heading = movement_data.cog
             self.speed = movement_data.sog
             self.send(wind_data.sid, awd, aws)
