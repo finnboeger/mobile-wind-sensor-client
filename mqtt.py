@@ -47,6 +47,49 @@ if "MQTT" in config:
             pass
 
 
+def number_to_base(number, base):
+    if number == 0:
+        return [0]
+    digits = []
+    while number > 0:
+        digits.append(int(number % base))
+        number //= base
+    return digits[::-1]
+
+
+def base_to_number(digits, base):
+    number = 0
+    for i, d in enumerate(digits[::-1]):
+        number += d * base ** i
+    return number
+
+
+def strip_leading_zeros(bytes):
+    # assuming 8 byte for timestamp + 4 byte for data, remove leading zeros from timestamp
+    i = 0
+    for i in range(len(bytes)):
+        if bytes[i] != 0:
+            break
+    return bytes[i:]
+
+
+def add_leading_zeros(bytes):
+    zeros = 12 - len(bytes)
+    return zeros * b"\x00" + bytes
+
+
+def encode(bytes):
+    unpacked = strip_leading_zeros(struct.unpack("!" + "B" * len(bytes), bytes))
+    digits = [d+1 for d in number_to_base(base_to_number(unpacked, 256), 255)]
+    return struct.pack("!" + "B" * len(digits), *digits)
+
+
+def decode(bytes):
+    unpacked = struct.unpack("!" + "B" * len(bytes), bytes)
+    digits = [d-1 for d in number_to_base(base_to_number(unpacked, 255), 256)]
+    return add_leading_zeros(struct.pack("!" + "B" * len(digits), *digits))
+
+
 def avg(iterable: Iterable[Union[float, int]]) -> float:
     length = 0
     counter = 0
@@ -102,11 +145,11 @@ def worker(recv: Queue) -> None:
 
         # True Wind
         client.publish(TOPIC + "/t",
-                       struct.pack(
+                       encode(struct.pack(
                            "!QHH",
                            msg.time_ms // 1000,
                            int(msg.true_wind_speed / 0.01),
-                           int(msg.true_wind_direction / 0.0001)),
+                           int(msg.true_wind_direction / 0.0001))),
                        qos=QOS)
         # Apparent Wind
         # client.publish(TOPIC + "/a",
