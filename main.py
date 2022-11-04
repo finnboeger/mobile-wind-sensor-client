@@ -216,7 +216,11 @@ class Handler(n2k.MessageHandler):
             self.send(wind_data.sid, awd, aws)
 
         if msg.pgn == n2k.PGN.VesselHeading:
-            self.compass_heading = n2k.messages.parse_n2k_heading(msg).heading
+            heading = n2k.messages.parse_n2k_heading(msg).heading
+            if heading > math.tau or heading < -math.tau:
+                # bad heading (radians)
+                return
+            self.compass_heading = heading % math.tau
             self.pos_send_queue.put(msg)
 
 
