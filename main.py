@@ -14,9 +14,15 @@ import asyncio
 
 import mqtt
 import position
+import os
 
 
 COMPASS_OFFSET = -90  # positive: north of the measurement unit is offset clockwise from the compass north. In degrees
+LOGFILE = "log.log"
+i = 0
+while os.path.exists(LOGFILE + str(i)):
+    i += 1
+LOG = open(LOGFILE + str(i), "w")
 
 
 # TODO: rework init
@@ -29,6 +35,8 @@ def init_gps(control_console: serial.Serial, output_console: serial.Serial) -> N
     response = control_console.read(1024)
     # TODO: Handle initialisation errors
     assert response.decode() == command + "\r\r\n" + "OK\r\n"
+
+    print("Waiting for GPS")
 
     # Wait for first GPS fix
     while True:
@@ -66,6 +74,7 @@ def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> None:
         data = [x for x in data.split("\r\n") if x is not None and len(x) > 0]
         parsed = [pynmea2.parse(d) for d in data]
         for sentence in parsed:
+            print(" ".join(map(str, [time.time(), sentence])), file=LOG)
             if isinstance(sentence, pynmea2.GSV):
                 # GNSS Satellites in view http://www.nmea.de/nmea0183datensaetze.html#gsv
                 pass
@@ -157,6 +166,8 @@ class Handler(n2k.MessageHandler):
         aws = apparent_speed
         twd, tws = combine_forces(apparent_direction, apparent_speed, self.heading, -self.speed)
 
+        print(" ".join(map(str, [time.time(), "SENT -", "awd:", awd, "aws:", aws, "twd:", twd, "tws:", tws])), file=LOG)
+
         self._node.send_msg(n2k.messages.set_n2k_wind_speed(
             sid=sid,
             wind_speed=tws,
@@ -221,6 +232,7 @@ class Handler(n2k.MessageHandler):
                 # bad heading (radians)
                 return
             self.compass_heading = heading % math.tau
+            print(" ".join(map(str, [time.time(), "COMPASS -", self.compass_heading])), file=LOG)
             self.pos_send_queue.put(msg)
 
 
