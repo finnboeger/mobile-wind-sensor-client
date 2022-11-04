@@ -26,7 +26,7 @@ USER = None
 PASS = None
 QOS = 1  # 0: fire and forget, 1: assert it has been received at least once, 2: assert it has been received exactly once
 FREQUENCY = 1  # send messages every n seconds
-GROUP_METHOD: GroupMethod  = GroupMethod("avg")  # how to combine the individual measurements for sending
+GROUP_METHOD: GroupMethod = GroupMethod("avg")  # how to combine the individual measurements for sending
 
 if "MQTT" in config:
     mqtt_config = config["MQTT"]
@@ -80,13 +80,13 @@ def add_leading_zeros(bytes):
 
 def encode(bytes):
     unpacked = strip_leading_zeros(struct.unpack("!" + "B" * len(bytes), bytes))
-    digits = [d+1 for d in number_to_base(base_to_number(unpacked, 256), 255)]
+    digits = [d + 1 for d in number_to_base(base_to_number(unpacked, 256), 255)]
     return struct.pack("!" + "B" * len(digits), *digits)
 
 
 def decode(bytes):
     unpacked = struct.unpack("!" + "B" * len(bytes), bytes)
-    digits = [d-1 for d in number_to_base(base_to_number(unpacked, 255), 256)]
+    digits = [d - 1 for d in number_to_base(base_to_number(unpacked, 255), 256)]
     return add_leading_zeros(struct.pack("!" + "B" * len(digits), *digits))
 
 
@@ -152,12 +152,12 @@ def worker(recv: Queue) -> None:
                            int(msg.true_wind_direction / 0.0001))),
                        qos=QOS)
         # Apparent Wind
-        # client.publish(TOPIC + "/a",
-        #                struct.pack(
-        #                    "!QHH",
-        #                    msg.time_ms // 1000,
-        #                    int(msg.apparent_wind_speed / 0.01),
-        #                    int(msg.apparent_wind_direction / 0.0001)),
-        #                qos=QOS)
+        client.publish(TOPIC + "/a",
+                       encode(struct.pack(
+                           "!QHH",
+                           msg.time_ms // 1000,
+                           int(msg.apparent_wind_speed / 0.01),
+                           int(msg.apparent_wind_direction / 0.0001))),
+                       qos=QOS)
 
         last = msg.time_ms
