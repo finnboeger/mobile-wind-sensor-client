@@ -132,7 +132,7 @@ def combine_forces(angle1: float, force1: float, angle2: float, force2: float) -
     vector2 = (force2 * math.cos(angle2), force2 * math.sin(angle2))
     vector_r = (vector1[0] + vector2[0], vector1[1] + vector2[1])
 
-    result_angle = (math.atan2(vector_r[1], vector_r[0])) % 360
+    result_angle = (math.atan2(vector_r[1], vector_r[0])) % math.tau
     result_magnitude = math.sqrt(vector_r[0] ** 2 + vector_r[1] ** 2)
     return result_angle, result_magnitude
 
