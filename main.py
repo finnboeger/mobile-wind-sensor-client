@@ -152,15 +152,29 @@ class Handler(n2k.MessageHandler):
         self.pos_send_queue = pos_send_queue
         self.pos_recv_queue = pos_recv_queue
 
-    def using_previous_data(self, msg: n2k.Message) -> None:
-        wind_data = n2k.messages.parse_n2k_wind_speed(msg)
-        twd, tws = combine_forces(wind_data.wind_angle, wind_data.wind_speed, self.heading, -self.speed)
+    def send(self, sid, apparent_direction, apparent_speed):
+        awd = apparent_direction
+        aws = apparent_speed
+        twd, tws = combine_forces(apparent_direction, apparent_speed, self.heading, -self.speed)
+
         self._node.send_msg(n2k.messages.set_n2k_wind_speed(
-            sid=wind_data.sid,
+            sid=sid,
             wind_speed=tws,
             wind_angle=twd,
             wind_reference=n2k.types.N2kWindReference(0),
         ))
+        self._node.send_msg(n2k.messages.set_n2k_wind_speed(
+            sid=sid,
+            wind_speed=aws,
+            wind_angle=awd,
+            wind_reference=n2k.types.N2kWindReference(2),
+        ))
+
+    def using_previous_data(self, msg: n2k.Message) -> None:
+        wind_data = n2k.messages.parse_n2k_wind_speed(msg)
+        awd = math.radians(math.degrees(wind_data.wind_angle + self.compass_heading) % 360 + COMPASS_OFFSET)
+        aws = wind_data.wind_speed
+        self.send(wind_data.sid, awd, aws)
 
     def handle_msg(self, msg: n2k.Message) -> None:
         if not (msg.pgn == n2k.PGN.WindSpeed or msg.pgn == n2k.PGN.VesselHeading):
@@ -197,19 +211,9 @@ class Handler(n2k.MessageHandler):
             aws = wind_data.wind_speed
             # TODO: calculate true heading using magnetic deviation and use that
             awd = math.radians(math.degrees(wind_data.wind_angle + self.compass_heading) % 360 + COMPASS_OFFSET)
-            twd, tws = combine_forces(wind_data.wind_angle, wind_data.wind_speed, movement_data.cog, -movement_data.sog)
-            self._node.send_msg(n2k.messages.set_n2k_wind_speed(
-                sid=wind_data.sid,
-                wind_speed=tws,
-                wind_angle=twd,
-                wind_reference=n2k.types.N2kWindReference(0),
-            ))
-            self._node.send_msg(n2k.messages.set_n2k_wind_speed(
-                sid=wind_data.sid,
-                wind_speed=aws,
-                wind_angle=awd,
-                wind_reference=n2k.types.N2kWindReference(2),
-            ))
+            self.heading = movement_data.cog
+            self.speed = movement_data.sog
+            self.send(wind_data.sid, awd, aws)
 
         if msg.pgn == n2k.PGN.VesselHeading:
             self.compass_heading = n2k.messages.parse_n2k_heading(msg).heading
