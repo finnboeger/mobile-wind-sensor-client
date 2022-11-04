@@ -84,7 +84,6 @@ def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> None:
                 if sentence.timestamp is None:
                     continue
                 timestamp = (sentence.timestamp.hour * 60 + sentence.timestamp.minute) * 60 + sentence.timestamp.second
-                print(float(sentence.lat) / 100, float(sentence.lon) / 100)
                 msg = n2k.messages.set_n2k_gnss_data(
                     sid=sid,
                     days_since_1970=int(time.time() // (60*60*24)),
