@@ -67,3 +67,13 @@ Insert the SD Card into the Pi and connect it to power. It should automatically 
 7. `git clone https://github.com/finnboeger/NMEA2000.git && cd NMEA2000 && python setup.py build && python setup.py install && cd ..` Install NMEA2000 library
 8. `git clone https://github.com/finnboeger/mobile-wind-sensor-client.git`
 9. `sudo echo 'sudo -u pi -- bash -c "cd /home/pi/mobile-wind-sensor-client/ && python main.py"' >> /etc/rc.local` Run client code on boot
+10. Create a `config.ini` in `mobile-wind-sensor-client` that contains the information for your mqtt broker in the following format: 
+```
+[MQTT]
+BROKER = 
+PORT = 
+CLIENT_ID = 
+TOPIC = 
+USER = 
+PASS = 
+```
