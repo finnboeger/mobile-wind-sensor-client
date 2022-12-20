@@ -23,7 +23,7 @@ While the code is geared for the listed components it should be easily adaptable
 - 4x M2.5 nut
 - 4x M2.5 flat-top screw
 - NMEA2000 panel connecter male, e.g. from [here](https://shop.hatlabs.fi/products/nmea-2000-panel-connector-male)
-- Waterproof enclosure for Pi assembly and mounting brackets, e.g. using [these 3D Prints]()
+- Waterproof enclosure for Pi assembly and mounting brackets, e.g. using [these 3D Prints](https://github.com/finnboeger/mobile-wind-sensor-3d-parts)
   - Requires a smaller GPS antenna than is included, e.g. [this one](https://www.amazon.de/gp/product/B07MHGPT8L)
   - The micro usb cable needs to protrude very little when using the unmodified enclosure.
 - 4 way NMEA2000 T connector
