@@ -17,7 +17,7 @@ import position
 import os
 
 
-COMPASS_OFFSET = -90  # positive: north of the measurement unit is offset clockwise from the compass north. In degrees
+COMPASS_OFFSET = -110  # positive: north of the measurement unit is offset clockwise from the compass north. In degrees
 LOGFILE = "log.log"
 i = 0
 while os.path.exists(LOGFILE + str(i)):
