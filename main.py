@@ -151,7 +151,7 @@ def combine_forces(angle1: float, force1: float, angle2: float, force2: float) -
 
     return result_angle, result_magnitude
 
-class TWBuffer():
+class WBuffer():
     _buffer: List
     max_length: int
 
@@ -183,8 +183,8 @@ class Handler(n2k.MessageHandler):
     compass_heading: float = 0.0
     speed: float = 0.0
     heading: float = 0.0
-    tw_buffer: TWBuffer
-    aw_buffer: TWBuffer
+    tw_buffer: WBuffer
+    aw_buffer: WBuffer
 
     def __init__(self,
                  node: n2k.Node,
@@ -195,8 +195,8 @@ class Handler(n2k.MessageHandler):
         self.pos_send_queue = pos_send_queue
         self.pos_recv_queue = pos_recv_queue
         self.ext_send_queue = external_send_queue
-        self.tw_buffer = TWBuffer()
-        self.aw_buffer = TWBuffer()
+        self.tw_buffer = WBuffer()
+        self.aw_buffer = WBuffer()
 
     def send(self, sid, apparent_direction, apparent_speed):
         awd = apparent_direction
