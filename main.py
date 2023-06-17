@@ -7,6 +7,7 @@ import pynmea2
 import serial
 import n2k
 from typings import MQTTMessage
+from typing import List
 import multiprocessing
 import time
 import queue
@@ -150,6 +151,30 @@ def combine_forces(angle1: float, force1: float, angle2: float, force2: float) -
 
     return result_angle, result_magnitude
 
+class TWBuffer():
+    _buffer: List
+    max_length: int
+
+    def __init__(self, max_length = 100):
+        self._buffer = []
+        self.max_length = max_length
+
+    def append(self, timestamp, wd, ws):
+        if len(self._buffer) >= self.max_length:
+            self._buffer.pop(0) # remove first element so that we don't exceed its max size
+        self._buffer.append((timestamp, wd, ws))
+
+    def avg(self, timespan):
+        if len(self._buffer) == 0:
+            return 0
+        last_timestamp = self._buffer[-1][0]
+        values = [(v[1], v[2]) for v in self._buffer if v[0] >= last_timestamp - timespan]
+        # combine forces and divide magnitude by len
+        avg_wd = 0
+        avg_ws = 0
+        for wd, ws in values:
+            avg_wd, avg_ws = combine_forces(avg_wd, avg_ws, wd, ws)
+        return avg_wd, avg_ws
 
 class Handler(n2k.MessageHandler):
     pos_send_queue: multiprocessing.Queue
@@ -158,6 +183,8 @@ class Handler(n2k.MessageHandler):
     compass_heading: float = 0.0
     speed: float = 0.0
     heading: float = 0.0
+    tw_buffer: TWBuffer
+    aw_buffer: TWBuffer
 
     def __init__(self,
                  node: n2k.Node,
@@ -168,12 +195,20 @@ class Handler(n2k.MessageHandler):
         self.pos_send_queue = pos_send_queue
         self.pos_recv_queue = pos_recv_queue
         self.ext_send_queue = external_send_queue
+        self.tw_buffer = TWBuffer()
+        self.aw_buffer = TWBuffer()
 
     def send(self, sid, apparent_direction, apparent_speed):
         awd = apparent_direction
         aws = apparent_speed
         # TODO: smooth true wind over N seconds (with 0 being no smoothing) to avoid jumpy directions due to oscillating wind sensor
         twd, tws = combine_forces(apparent_direction, apparent_speed, self.heading, -self.speed)
+
+        self.aw_buffer.append(int(time.time()), awd, aws)
+        self.tw_buffer.append(int(time.time()), twd, tws)
+
+        awd, aws = self.aw_buffer.avg(5)
+        twd, tws = self.tw_buffer.avg(5)
 
         print(" ".join(map(str, [time.time(), "SENT -", "awd:", awd, "aws:", aws, "twd:", twd, "tws:", tws])), file=LOG, flush=True)
 
