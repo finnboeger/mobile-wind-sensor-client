@@ -143,6 +143,11 @@ def combine_forces(angle1: float, force1: float, angle2: float, force2: float) -
 
     result_angle = (math.atan2(vector_r[1], vector_r[0])) % math.tau
     result_magnitude = math.sqrt(vector_r[0] ** 2 + vector_r[1] ** 2)
+    print("Boat Speed:", "{:.2f}".format(-force2), "Boat Heading:", "{:.2f}".format(math.degrees(angle2)))
+    print("Wind Speed:", "{:.2f}".format(force1), "Wind Angle:  ", "{:.2f}".format(math.degrees(angle1)))
+    print("Calc Speed:", "{:.2f}".format(result_magnitude), "Calc Angle:  ", "{:.2f}".format(math.degrees(result_angle)))
+    print("")
+
     return result_angle, result_magnitude
 
 
