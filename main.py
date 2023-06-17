@@ -172,6 +172,7 @@ class Handler(n2k.MessageHandler):
     def send(self, sid, apparent_direction, apparent_speed):
         awd = apparent_direction
         aws = apparent_speed
+        # TODO: smooth true wind over N seconds (with 0 being no smoothing) to avoid jumpy directions due to oscillating wind sensor
         twd, tws = combine_forces(apparent_direction, apparent_speed, self.heading, -self.speed)
 
         print(" ".join(map(str, [time.time(), "SENT -", "awd:", awd, "aws:", aws, "twd:", twd, "tws:", tws])), file=LOG, flush=True)
