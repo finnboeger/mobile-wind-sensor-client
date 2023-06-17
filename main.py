@@ -74,7 +74,7 @@ def gps_listener(console: serial.Serial, q: multiprocessing.Queue, ) -> None:
         data = [x for x in data.split("\r\n") if x is not None and len(x) > 0]
         parsed = [pynmea2.parse(d) for d in data]
         for sentence in parsed:
-            print(" ".join(map(str, [time.time(), sentence])), file=LOG)
+            print(" ".join(map(str, [time.time(), sentence])), file=LOG, flush=True)
             if isinstance(sentence, pynmea2.GSV):
                 # GNSS Satellites in view http://www.nmea.de/nmea0183datensaetze.html#gsv
                 pass
@@ -165,7 +165,7 @@ class Handler(n2k.MessageHandler):
         aws = apparent_speed
         twd, tws = combine_forces(apparent_direction, apparent_speed, self.heading, -self.speed)
 
-        print(" ".join(map(str, [time.time(), "SENT -", "awd:", awd, "aws:", aws, "twd:", twd, "tws:", tws])), file=LOG)
+        print(" ".join(map(str, [time.time(), "SENT -", "awd:", awd, "aws:", aws, "twd:", twd, "tws:", tws])), file=LOG, flush=True)
 
         self._node.send_msg(n2k.messages.set_n2k_wind_speed(
             sid=sid,
@@ -231,7 +231,7 @@ class Handler(n2k.MessageHandler):
                 # bad heading (radians)
                 return
             self.compass_heading = heading % math.tau
-            print(" ".join(map(str, [time.time(), "COMPASS -", self.compass_heading])), file=LOG)
+            print(" ".join(map(str, [time.time(), "COMPASS -", self.compass_heading])), file=LOG, flush=True)
             self.pos_send_queue.put(msg)
 
 
