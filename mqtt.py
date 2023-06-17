@@ -24,7 +24,7 @@ CLIENT_ID = "wind pi"
 TOPIC = "luv"
 USER = None
 PASS = None
-QOS = 1  # 0: fire and forget, 1: assert it has been received at least once, 2: assert it has been received exactly once
+QOS = 0  # 0: fire and forget, 1: assert it has been received at least once, 2: assert it has been received exactly once
 FREQUENCY = 1  # send messages every n seconds
 GROUP_METHOD: GroupMethod = GroupMethod("avg")  # how to combine the individual measurements for sending
 
