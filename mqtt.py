@@ -145,19 +145,19 @@ def worker(recv: Queue) -> None:
 
         # True Wind
         client.publish(TOPIC + "/t",
-                       encode(struct.pack(
+                       struct.pack(
                            "!QHH",
                            msg.time_ms // 1000,
                            int(msg.true_wind_speed / 0.01),
-                           int(msg.true_wind_direction / 0.0001))),
+                           int(msg.true_wind_direction / 0.0001)),
                        qos=QOS)
         # Apparent Wind
         client.publish(TOPIC + "/a",
-                       encode(struct.pack(
+                       struct.pack(
                            "!QHH",
                            msg.time_ms // 1000,
                            int(msg.apparent_wind_speed / 0.01),
-                           int(msg.apparent_wind_direction / 0.0001))),
+                           int(msg.apparent_wind_direction / 0.0001)),
                        qos=QOS)
 
         last = msg.time_ms
