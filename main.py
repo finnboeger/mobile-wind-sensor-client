@@ -6,6 +6,7 @@ import threading
 import pynmea2
 import serial
 import n2k
+from typings import MQTTMessage
 import multiprocessing
 import time
 import queue
@@ -148,6 +149,7 @@ def combine_forces(angle1: float, force1: float, angle2: float, force2: float) -
 class Handler(n2k.MessageHandler):
     pos_send_queue: multiprocessing.Queue
     pos_recv_queue: multiprocessing.Queue
+    ext_send_queue: multiprocessing.Queue
     compass_heading: float = 0.0
     speed: float = 0.0
     heading: float = 0.0
@@ -155,10 +157,12 @@ class Handler(n2k.MessageHandler):
     def __init__(self,
                  node: n2k.Node,
                  pos_send_queue: multiprocessing.Queue,
-                 pos_recv_queue: multiprocessing.Queue):
+                 pos_recv_queue: multiprocessing.Queue,
+                 external_send_queue: multiprocessing.Queue):
         super().__init__(0, node)
         self.pos_send_queue = pos_send_queue
         self.pos_recv_queue = pos_recv_queue
+        self.ext_send_queue = external_send_queue
 
     def send(self, sid, apparent_direction, apparent_speed):
         awd = apparent_direction
@@ -167,17 +171,28 @@ class Handler(n2k.MessageHandler):
 
         print(" ".join(map(str, [time.time(), "SENT -", "awd:", awd, "aws:", aws, "twd:", twd, "tws:", tws])), file=LOG, flush=True)
 
-        self._node.send_msg(n2k.messages.set_n2k_wind_speed(
+        true_wind_message = n2k.messages.set_n2k_wind_speed(
             sid=sid,
             wind_speed=tws,
             wind_angle=twd,
             wind_reference=n2k.types.N2kWindReference(0),
-        ))
-        self._node.send_msg(n2k.messages.set_n2k_wind_speed(
+        )
+        apparent_wind_message = n2k.messages.set_n2k_wind_speed(
             sid=sid,
             wind_speed=aws,
             wind_angle=awd,
             wind_reference=n2k.types.N2kWindReference(2),
+        )
+
+        self._node.send_msg(true_wind_message)
+        self._node.send_msg(apparent_wind_message)
+
+        self.ext_send_queue.put(MQTTMessage(
+            time_ms=time.time() * 1000,
+            apparent_wind_speed=aws,
+            apparent_wind_direction=awd,
+            true_wind_speed=tws,
+            true_wind_direction=twd,
         ))
 
     def using_previous_data(self, msg: n2k.Message) -> None:
@@ -275,7 +290,7 @@ if __name__ == "__main__":
         n2k_node.set_product_information("Test", "0.0.1", "Dev", "00000000001", 5)
         n2k_node.set_configuration_information()
 
-        handler = Handler(n2k_node, position_send_queue, position_recv_queue)
+        handler = Handler(n2k_node, position_send_queue, position_recv_queue, mqtt_queue)
         n2k_node.attach_msg_handler(handler)
         notifier.add_listener(n2k_node)
 
