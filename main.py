@@ -1,5 +1,5 @@
-# import sys
-# sys.path.insert(0, "../n2k")
+import sys
+sys.path.insert(0, "../n2k")
 import math
 import threading
 
@@ -174,7 +174,7 @@ class WBuffer():
         avg_ws = 0
         for wd, ws in values:
             avg_wd, avg_ws = combine_forces(avg_wd, avg_ws, wd, ws)
-        return avg_wd, avg_ws
+        return avg_wd, avg_ws/len(values)
 
 class Handler(n2k.MessageHandler):
     pos_send_queue: multiprocessing.Queue

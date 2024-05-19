@@ -24,7 +24,7 @@ CLIENT_ID = "wind pi"
 TOPIC = "luv"
 USER = None
 PASS = None
-QOS = 0  # 0: fire and forget, 1: assert it has been received at least once, 2: assert it has been received exactly once
+QOS = 1  # 0: fire and forget, 1: assert it has been received at least once, 2: assert it has been received exactly once
 FREQUENCY = 1  # send messages every n seconds
 GROUP_METHOD: GroupMethod = GroupMethod("avg")  # how to combine the individual measurements for sending
 
@@ -128,7 +128,13 @@ def worker(recv: Queue) -> None:
     client = mqtt.Client(client_id=CLIENT_ID, userdata=None, protocol=mqtt.MQTTv5)
     client.tls_set(tls_version=mqtt.ssl.PROTOCOL_TLS)
     client.username_pw_set(username=USER, password=PASS)
-    client.connect(BROKER, PORT)
+    while True:
+        try:
+            print("connecting")
+            client.connect(BROKER, PORT)
+            break
+        except:
+            pass
     client.loop_start()
 
     last = 0
@@ -143,6 +149,7 @@ def worker(recv: Queue) -> None:
         msg = combine_msgs(buf, GROUP_METHOD)
         buf.clear()
 
+        print(msg)
         # True Wind
         client.publish(TOPIC + "/t",
                        struct.pack(
