@@ -18,14 +18,13 @@ import mqtt
 import position
 import os
 
-
 COMPASS_OFFSET = -110  # positive: north of the measurement unit is offset clockwise from the compass north. In degrees
 LOGFILE = "log.log"
 i = 0
 while os.path.exists(LOGFILE + str(i)):
     i += 1
 LOG = open(LOGFILE + str(i), "w")
-
+RAW_LOG = open("raw.log" + str(i), "w")
 
 # TODO: rework init
 def init_gps(control_console: serial.Serial, output_console: serial.Serial) -> None:
@@ -245,6 +244,7 @@ class Handler(n2k.MessageHandler):
     def handle_msg(self, msg: n2k.Message) -> None:
         if not (msg.pgn == n2k.PGN.WindSpeed or msg.pgn == n2k.PGN.VesselHeading):
             return
+        print(str(msg), file=RAW_LOG, flush=True)
 
         # TODO: basically everything, message flow is weird at the moment
         #       especially remove dependency on frequency / order of messages
