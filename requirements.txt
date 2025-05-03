@@ -1,4 +1,0 @@
-n2k
-pyserial
-pynmea2
-paho-mqtt
