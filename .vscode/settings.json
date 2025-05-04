@@ -1,0 +1,18 @@
+{
+    "search.exclude": {
+        ".venv": true,
+        "docs/build": true,
+    },
+    "python.defaultInterpreterPath": ".venv/bin/python",
+    "autoDocstring.docstringFormat": "sphinx-notypes",
+    "cSpell.language": "en",
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "charliermarsh.ruff"
+    },
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+}

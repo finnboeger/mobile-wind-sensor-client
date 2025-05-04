@@ -1,0 +1,77 @@
+[project]
+name = "windbot-client"
+version = "0.2.0"
+description = "Mobile wind monitoring system, measuring true wind speed and direction and sending that data over NMEA2000, Internet+MQTT and LoRa"
+authors = [
+    { name = "Finn Böger", email="finnboeger@googlemail.com" },
+]
+license = "MIT"
+license-files = ["LICENSE.txt"]
+readme = "README.md"
+requires-python = ">=3.11"
+
+keywords = ["NMEA2000", "CAN", "Sailing", "Wind"]
+
+[project.urls]
+homepage = "https://github.com/finnboeger/mobile-wind-sensor-client"
+repository = "https://github.com/finnboeger/mobile-wind-sensor-client"
+
+[tool.ruff]
+line-length = 88
+indent-width = 4
+exclude = [
+    ".git",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "docs/build",
+]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # Doc style rules where we have chosen a different style
+    "D203", # 1 blank line required before class docstring
+    "D212", # Multi-line docstring summary should be on the first line
+    "D400", # First line should end with a period. Conflicts with D213.
+    "D415", # First line should end with a punctuation mark. Conflicts with D213.
+
+    # Rules I don't agree with / that don't apply to this project
+    "D301", # Escape Sequences in Docstrings. Triggers on \n which are required to tell sphinx to add a newline
+    "PERF401", # use list.extend(list comprehension) instead of list.append in a loop
+    "SIM105", # use `contextlib.suppress` instead of try/except/pass
+    "TD002", # missing TODO author
+    "TD003", # missing TODO link; we're not tracking TODOs in issues
+    "FIX002", # line contains TODO comment; we use these to document required future work
+
+    # Don't require docstrings everywhere for now
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ignore all rules for tests
+"tests/**/*.py" = [
+    "S101", # allow asserts in tests
+    "PLR2004", # Magic value used in comparison
+    "D", # Don't care about docstrings in tests
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+
+[tool.bandit.assert_used]
+skips = ['*/test_*.py']
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = [
+    "--import-mode=importlib",
+]

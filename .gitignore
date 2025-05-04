@@ -1,6 +1,13 @@
-.venv
-*.pyc
 .idea
+.venv
+.DS_Store
 
-config.ini
+__pycache__
+*.pyc
+docs/build
+dist
+*.egg-info
+.coverage
+
 *.log
+config.ini
