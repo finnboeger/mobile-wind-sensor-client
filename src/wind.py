@@ -1,3 +1,4 @@
+import logging
 import math
 from queue import Queue
 
@@ -6,6 +7,8 @@ import n2k
 import config
 from structs import ApparentWindData, HeadingData, PositionData, TrueWindData
 from utils.vector import PolarCoordinates, Vector2D
+
+logger = logging.getLogger(__name__)
 
 #: offset to apply to the compass data in radians. positive values indicate that
 #: the north of the measurement unit is offset clockwise from the compass north.
@@ -91,6 +94,13 @@ def worker(
             current_heading.timestamp
             < (current_apparent_wind.timestamp - maximum_allowed_offset)
         ):
+            logger.debug(
+                "Position or heading data is too old, skipping wind update. "
+                "Position time: %d, Heading time: %d, Wind time: %d",
+                latest_position_time,
+                current_heading.timestamp,
+                current_apparent_wind.timestamp,
+            )
             continue
 
         apparent_wind_vector = Vector2D.from_polar(
@@ -128,6 +138,19 @@ def worker(
             wind_speed=average_true_wind_polar.magnitude,
             timestamp=current_apparent_wind.timestamp,
         )
+
+        if logger.getEffectiveLevel() <= logging.DEBUG:
+            logger.debug(
+                "Average True Wind (5seconds): %.2fkts from %.1f°",
+                n2k.utils.meters_per_second_to_knots(average_true_wind_polar.magnitude),
+                n2k.utils.rad_to_deg(average_true_wind_polar.angle),
+            )
+            current_true_wind_polar = current_true_wind_vector.to_polar()
+            logger.debug(
+                "Current True Wind: %.2fkts from %.1f°",
+                n2k.utils.meters_per_second_to_knots(current_true_wind_polar.magnitude),
+                n2k.utils.rad_to_deg(current_true_wind_polar.angle),
+            )
 
         for consumer in consumers:
             consumer.put(average_true_wind)

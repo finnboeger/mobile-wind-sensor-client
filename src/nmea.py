@@ -4,6 +4,7 @@ from queue import Queue
 import can
 import n2k
 
+import log
 from structs import ApparentWindData, HeadingData
 
 MAX_WIND_SPEED = 200  # m/s, values above this are considered invalid
@@ -68,6 +69,7 @@ class Handler(n2k.MessageHandler):
                 timestamp=msg.msg_time,
             )
             self.wind_queue.put(wind_data)
+            log.data("wind", wind_data)
             return
 
         if msg.pgn == n2k.PGN.VesselHeading:
@@ -80,3 +82,4 @@ class Handler(n2k.MessageHandler):
                 timestamp=msg.msg_time,
             )
             self.heading_queue.put(heading_data)
+            log.data("heading", heading_data)

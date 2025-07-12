@@ -1,28 +1,44 @@
 import datetime
+import json
+import logging
+import math
 import threading
+import time
 from decimal import Decimal
 from queue import Queue
 
 import pynmea2
 import serial
 
+import log
 from structs import FAAMode, FixType, PositionData, Quality, Satellite
+from utils.vector import Vector2D
 
 SERIAL_PORT = "/dev/ttyACM0"
+
+logger = logging.getLogger(__name__)
 
 
 def read_next_sentence(console: serial.Serial) -> pynmea2.NMEASentence:
     while True:
         data = console.readline().decode()
         if len(data) == 0:
+            logger.debug("Read empty line from GPS console")
             continue
+        log.data("gps", data.strip())
         return pynmea2.parse(data)
 
 
 def wait_for_gps_fix(console: serial.Serial) -> None:
+    start = time.time()
+
     while True:
         sentence = read_next_sentence(console)
         if isinstance(sentence, pynmea2.GLL) and sentence.status == "A":
+            logger.info(
+                "GPS Fix found, took %.1f seconds",
+                round(time.time() - start, ndigits=1),
+            )
             return
 
 
@@ -313,6 +329,44 @@ def process_sentences(sentences: list[pynmea2.NMEASentence]) -> PositionData:
     return data
 
 
+def log_position_info(last_position: PositionData, position: PositionData) -> None:
+    if last_position.status == "A" and position.status == "V":
+        logger.info("GPS fix lost")
+    elif last_position.status == "V" and position.status == "A":
+        logger.info("GPS fix reacquired")
+    elif (
+        last_position.status == "A" and position.status == "A"
+    ) and logger.getEffectiveLevel() <= logging.DEBUG:
+        if not (
+            last_position.latitude is not None
+            and last_position.longitude is not None
+            and position.latitude is not None
+            and position.longitude is not None
+        ):
+            error_message = (
+                "Current or last position has missing latitude or longitude."
+            )
+            raise TypeError(error_message)
+
+        movement_vector = Vector2D(
+            x=last_position.latitude - position.latitude,
+            y=last_position.longitude - position.longitude,
+        )
+        logger.debug(
+            "Old Position: %.7f, %.7f",
+            last_position.latitude,
+            last_position.longitude,
+        )
+        logger.debug(
+            "New Position: %.7f, %.7f",
+            position.latitude,
+            position.longitude,
+        )
+        logger.debug(
+            "Calculated Track angle, %.1f",
+            math.degrees(movement_vector.to_polar().angle),
+        )
+
 
 def worker(position_queue: Queue[PositionData]) -> None:
     """
@@ -325,6 +379,7 @@ def worker(position_queue: Queue[PositionData]) -> None:
         wait_for_gps_fix(console)
 
         sentences: list[pynmea2.NMEASentence] = []
+        last_position: PositionData | None = None
 
         while True:
             sentence = read_next_sentence(console)
@@ -332,13 +387,23 @@ def worker(position_queue: Queue[PositionData]) -> None:
                 # RMC: Recommended Minimum Navigation Information
                 if len(sentences) > 0:
                     try:
+                        logger.debug("Read %d sentences", len(sentences))
                         position = process_sentences(sentences)
+                        if last_position is not None:
+                            log_position_info(last_position, position)
+                        last_position = position
 
                         # only submit valid position data
                         if position.status == "A":
                             position_queue.put(position)
-                    except Exception as e:
-                        print(e)
+                    except Exception:
+                        logger.exception(
+                            "Error processing sentences.",
+                        )
+                        logger.error(  # noqa: TRY400
+                            "Encountered while processing Sentences: %s",
+                            json.dumps([str(s) for s in sentences], indent=2),
+                        )
 
                 # reset data for the next group of sentences
                 sentences = [sentence]
