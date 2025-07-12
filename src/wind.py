@@ -3,12 +3,13 @@ from queue import Queue
 
 import n2k
 
+import config
 from structs import ApparentWindData, HeadingData, PositionData, TrueWindData
 from utils.vector import PolarCoordinates, Vector2D
 
 #: offset to apply to the compass data in radians. positive values indicate that
 #: the north of the measurement unit is offset clockwise from the compass north.
-COMPASS_OFFSET = math.radians(0)
+COMPASS_OFFSET = math.radians(config.Config().SENSOR.COMPASS_OFFSET_DEGREES)
 
 
 def read_position_queue(
