@@ -1,11 +1,19 @@
 import logging
 import math
+from dataclasses import asdict
 from queue import Queue
 
 import n2k
 
 import config
-from structs import ApparentWindData, HeadingData, PositionData, TrueWindData
+from structs import (
+    ApparentWindData,
+    CorrectedApparentWindData,
+    HeadingData,
+    PositionData,
+    TrueWindData,
+    WindData,
+)
 from utils.vector import PolarCoordinates, Vector2D
 
 logger = logging.getLogger(__name__)
@@ -13,6 +21,9 @@ logger = logging.getLogger(__name__)
 #: offset to apply to the compass data in radians. positive values indicate that
 #: the north of the measurement unit is offset clockwise from the compass north.
 COMPASS_OFFSET = math.radians(config.Config().SENSOR.COMPASS_OFFSET_DEGREES)
+
+#: amount of seconds to average wind data over
+WIND_AVERAGING_SECONDS = 5
 
 
 def read_position_queue(
@@ -39,16 +50,53 @@ def read_position_queue(
     return movement_buffer, latest_position_time
 
 
+class WindBuffer:
+    def __init__(self, max_age: int) -> None:
+        self.buffer: list[tuple[Vector2D, int]] = []
+        self.max_age = max_age
+
+    def append(self, wind_data: tuple[Vector2D, int]) -> None:
+        self.buffer.append(wind_data)
+
+        # drop out-of-date wind data from the buffer
+        self.buffer = [
+            data for data in self.buffer if (data[1] > wind_data[1] - self.max_age)
+        ]
+
+    def ready(self) -> bool:
+        return len(self.buffer) > 0
+
+    def average(self) -> Vector2D:
+        if not self.ready():
+            msg = "WindBuffer is not ready, cannot compute average."
+            raise ValueError(msg)
+
+        return sum(
+            (wind_vector for [wind_vector, _] in self.buffer),
+            start=Vector2D(x=0, y=0),
+        ) / len(self.buffer)
+
+    def average_wind_data(self) -> WindData:
+        average_polar = self.average().to_polar()
+        return WindData(
+            wind_angle=average_polar.angle,
+            wind_speed=average_polar.magnitude,
+            timestamp=self.buffer[-1][1],  # timestamp of the last entry
+        )
+
+
 def worker(
     position_queue: Queue[PositionData],
     heading_queue: Queue[HeadingData],
     wind_queue: Queue[ApparentWindData],
-    consumers: list[Queue[TrueWindData]],
+    consumers: list[Queue[tuple[CorrectedApparentWindData, TrueWindData]]],
 ) -> None:
     current_movement_vector: Vector2D | None = None
     latest_position_time: int | None = None
     current_heading: HeadingData | None = None
-    wind_buffer: list[tuple[Vector2D, int]] = []
+    # store the wind vectors of the last few seconds to compute an average
+    true_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_SECONDS)
+    apparent_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_SECONDS)
 
     while True:
         # get wind data, blocking
@@ -103,7 +151,7 @@ def worker(
             )
             continue
 
-        apparent_wind_vector = Vector2D.from_polar(
+        current_apparent_wind_vector = Vector2D.from_polar(
             PolarCoordinates(
                 angle=current_apparent_wind.wind_angle
                 + current_heading.heading
@@ -112,38 +160,33 @@ def worker(
             ),
         )
 
-        current_true_wind_vector = apparent_wind_vector - current_movement_vector
+        current_true_wind_vector = (
+            current_apparent_wind_vector - current_movement_vector
+        )
 
-        # send true wind vector to output queues (mqtt, db, lora)
-        wind_buffer.append((current_true_wind_vector, current_apparent_wind.timestamp))
+        # send wind vector to output queues (mqtt, db, lora)
+        true_wind_buffer.append(
+            (current_true_wind_vector, current_apparent_wind.timestamp),
+        )
+        apparent_wind_buffer.append(
+            (current_apparent_wind_vector, current_apparent_wind.timestamp),
+        )
 
-        # drop wind data older than 10 seconds from the buffer
-        wind_buffer = [
-            wind_data
-            for wind_data in wind_buffer
-            if (wind_data[1] > current_apparent_wind.timestamp - 10)
-        ]
-        # compute the average true wind vector from the buffer
-        if len(wind_buffer) == 0:
+        # compute the average wind vector from the buffer
+        if not true_wind_buffer.ready() or not apparent_wind_buffer.ready():
             continue
 
-        average_true_wind_vector = sum(
-            (wind_vector for [wind_vector, _] in wind_buffer),
-            start=Vector2D(x=0, y=0),
-        ) / len(wind_buffer)
-
-        average_true_wind_polar = average_true_wind_vector.to_polar()
-        average_true_wind = TrueWindData(
-            wind_angle=average_true_wind_polar.angle,
-            wind_speed=average_true_wind_polar.magnitude,
-            timestamp=current_apparent_wind.timestamp,
+        average_true_wind = TrueWindData(**asdict(true_wind_buffer.average_wind_data()))
+        average_apparent_wind = CorrectedApparentWindData(
+            **asdict(apparent_wind_buffer.average_wind_data()),
         )
 
         if logger.getEffectiveLevel() <= logging.DEBUG:
             logger.debug(
-                "Average True Wind (5seconds): %.2fkts from %.1f°",
-                n2k.utils.meters_per_second_to_knots(average_true_wind_polar.magnitude),
-                n2k.utils.rad_to_deg(average_true_wind_polar.angle),
+                "Average True Wind (%d seconds): %.2fkts from %.1f°",
+                WIND_AVERAGING_SECONDS,
+                n2k.utils.meters_per_second_to_knots(average_true_wind.wind_speed),
+                n2k.utils.rad_to_deg(average_true_wind.wind_angle),
             )
             current_true_wind_polar = current_true_wind_vector.to_polar()
             logger.debug(
@@ -152,5 +195,18 @@ def worker(
                 n2k.utils.rad_to_deg(current_true_wind_polar.angle),
             )
 
+            logger.debug(
+                "Average Apparent Wind (%d seconds): %.2fkts from %.1f°",
+                WIND_AVERAGING_SECONDS,
+                n2k.utils.meters_per_second_to_knots(average_apparent_wind.wind_speed),
+                n2k.utils.rad_to_deg(average_apparent_wind.wind_angle),
+            )
+            current_true_wind_polar = current_true_wind_vector.to_polar()
+            logger.debug(
+                "Current Apparent Wind: %.2fkts from %.1f°",
+                n2k.utils.meters_per_second_to_knots(current_apparent_wind.wind_speed),
+                n2k.utils.rad_to_deg(current_apparent_wind.wind_angle),
+            )
+
         for consumer in consumers:
-            consumer.put(average_true_wind)
+            consumer.put((average_apparent_wind, average_true_wind))

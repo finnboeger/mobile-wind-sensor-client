@@ -143,8 +143,12 @@ class WindData:
 
 
 class ApparentWindData(WindData):
-    pass
+    """Apparent wind with wind speed and angle."""
+
+
+class CorrectedApparentWindData(WindData):
+    """Apparent wind with wind speed and direction."""
 
 
 class TrueWindData(WindData):
-    pass
+    """True wind with wind speed and direction."""

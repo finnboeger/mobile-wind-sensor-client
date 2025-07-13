@@ -5,7 +5,12 @@ import can
 import n2k
 
 import log
-from structs import ApparentWindData, HeadingData
+from structs import (
+    ApparentWindData,
+    CorrectedApparentWindData,
+    HeadingData,
+    TrueWindData,
+)
 
 MAX_WIND_SPEED = 200  # m/s, values above this are considered invalid
 
@@ -83,3 +88,38 @@ class Handler(n2k.MessageHandler):
             )
             self.heading_queue.put(heading_data)
             log.data("heading", heading_data)
+
+
+def forward_wind(
+    n2k_node: n2k.Node,
+    queue: Queue[tuple[CorrectedApparentWindData, TrueWindData]],
+) -> None:
+    """
+    Forward wind data from the input to the NMEA2000 network and the output queue.
+
+    Both the corrected apparent wind (original apparent wind combined with heading data
+    to calculate the apparent wind direction instead of angle) and the true wind data
+    are sent as NMEA2000 messages.
+
+    :param n2k_node: NMEA2000 Node to send messages through.
+    :param input_queue: Input queue containing position data.
+    :param output_queue: Output queue to forward position data.
+    """
+    while True:
+        apparent_wind_data, true_wind_data = queue.get()
+        msg = n2k.messages.create_n2k_wind_speed_message(
+            n2k.messages.WindSpeed(
+                wind_speed=true_wind_data.wind_speed,
+                wind_angle=true_wind_data.wind_angle,
+                wind_reference=n2k.types.N2kWindReference.TrueNorth,
+            ),
+        )
+        n2k_node.send_msg(msg)
+        msg = n2k.messages.create_n2k_wind_speed_message(
+            n2k.messages.WindSpeed(
+                wind_speed=apparent_wind_data.wind_speed,
+                wind_angle=apparent_wind_data.wind_angle,
+                wind_reference=n2k.types.N2kWindReference.Apparent,
+            ),
+        )
+        n2k_node.send_msg(msg)
