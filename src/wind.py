@@ -34,6 +34,7 @@ def read_position_queue(
     while not position_queue.empty():
         position = position_queue.get()
         if position.true_course is None or position.speed is None:
+            logger.debug("Discarding position data with missing course or speed.")
             continue
         movement_buffer.append(
             Vector2D.from_polar(
@@ -101,6 +102,11 @@ def worker(
     while True:
         # get wind data, blocking
         current_apparent_wind = wind_queue.get()
+        logger.debug(
+            "Received wind data: %.2f m/s at %.1f°",
+            current_apparent_wind.wind_speed,
+            n2k.utils.rad_to_deg(current_apparent_wind.wind_angle),
+        )
 
         # get every message in compass data, non-blocking
         while not heading_queue.empty():

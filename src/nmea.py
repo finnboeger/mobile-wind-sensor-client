@@ -11,12 +11,13 @@ from structs import (
     HeadingData,
     PositionData,
     TrueWindData,
+    WindData,
 )
 
 MAX_WIND_SPEED = 200  # m/s, values above this are considered invalid
 
 
-def init() -> tuple[n2k.Node, Queue[HeadingData], Queue]:
+def init() -> tuple[n2k.Node, Queue[HeadingData], Queue[WindData]]:
     """
     Initialize the NMEA2000 Node.
 
@@ -48,7 +49,7 @@ def init() -> tuple[n2k.Node, Queue[HeadingData], Queue]:
 
 class Handler(n2k.MessageHandler):
     heading_queue: Queue[HeadingData]
-    wind_queue: Queue
+    wind_queue: Queue[WindData]
 
     def __init__(
         self,

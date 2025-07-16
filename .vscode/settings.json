@@ -29,6 +29,7 @@
         "ndigits",
         "NMEA",
         "pdop",
+        "pynmea",
         "pyright",
         "pytest",
         "pythonpath",

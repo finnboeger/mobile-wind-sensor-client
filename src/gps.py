@@ -19,6 +19,13 @@ SERIAL_PORT = "/dev/ttyACM0"
 logger = logging.getLogger(__name__)
 
 
+def reader_thread(queue: Queue[pynmea2.NMEASentence]) -> None:
+    with serial.Serial(SERIAL_PORT, baudrate=115200, timeout=0) as console:
+        while True:
+            sentence = read_next_sentence(console)
+            queue.put(sentence)
+
+
 def read_next_sentence(console: serial.Serial) -> pynmea2.NMEASentence:
     while True:
         data = console.readline().decode()
@@ -29,11 +36,11 @@ def read_next_sentence(console: serial.Serial) -> pynmea2.NMEASentence:
         return pynmea2.parse(data)
 
 
-def wait_for_gps_fix(console: serial.Serial) -> None:
+def wait_for_gps_fix(queue: Queue[pynmea2.NMEASentence]) -> None:
     start = time.time()
 
     while True:
-        sentence = read_next_sentence(console)
+        sentence = queue.get()
         if isinstance(sentence, pynmea2.GLL) and sentence.status == "A":
             logger.info(
                 "GPS Fix found, took %.1f seconds",
@@ -366,55 +373,64 @@ def log_position_info(last_position: PositionData, position: PositionData) -> No
             "Calculated Track angle, %.1f",
             math.degrees(movement_vector.to_polar().angle),
         )
+        logger.debug(
+            "Provided Movement: Speed: %.2f, Direction: %s",
+            position.speed,
+            f"{position.true_course:.2f}"
+            if position.true_course is not None
+            else "None",
+        )
 
 
-def worker(position_queue: Queue[PositionData]) -> None:
+def worker(
+    sentence_queue: Queue[pynmea2.NMEASentence],
+    position_queue: Queue[PositionData],
+) -> None:
     """
     Read the GPS position data from the serial console and forward it to the queue.
 
     :param position_queue: Queue to output GPS position data to.
     """
-    with serial.Serial(SERIAL_PORT, baudrate=115200, timeout=0) as console:
-        # Wait for first GPS fix
-        wait_for_gps_fix(console)
+    # Wait for first GPS fix
+    wait_for_gps_fix(sentence_queue)
 
-        sentences: list[pynmea2.NMEASentence] = []
-        last_position: PositionData | None = None
+    sentences: list[pynmea2.NMEASentence] = []
+    last_position: PositionData | None = None
 
-        while True:
-            sentence = read_next_sentence(console)
-            if isinstance(sentence, pynmea2.RMC):
-                # RMC: Recommended Minimum Navigation Information
-                if len(sentences) > 0:
-                    try:
-                        logger.debug("Read %d sentences", len(sentences))
-                        position = process_sentences(sentences)
-                        if last_position is not None:
-                            log_position_info(last_position, position)
-                        last_position = position
+    while True:
+        sentence = sentence_queue.get()
+        if isinstance(sentence, pynmea2.RMC):
+            # RMC: Recommended Minimum Navigation Information
+            if len(sentences) > 0:
+                try:
+                    logger.debug("Read %d sentences", len(sentences))
+                    position = process_sentences(sentences)
+                    if last_position is not None:
+                        log_position_info(last_position, position)
+                    last_position = position
 
-                        # only submit valid position data
-                        if position.status == "A":
-                            position_queue.put(position)
-                    except Exception:
-                        logger.exception(
-                            "Error processing sentences.",
-                        )
-                        logger.error(  # noqa: TRY400
-                            "Encountered while processing Sentences: %s",
-                            json.dumps([str(s) for s in sentences], indent=2),
-                        )
+                    # only submit valid position data
+                    if position.status == "A":
+                        position_queue.put(position)
+                except Exception:
+                    logger.exception(
+                        "Error processing sentences.",
+                    )
+                    logger.error(  # noqa: TRY400
+                        "Encountered while processing Sentences: %s",
+                        json.dumps([str(s) for s in sentences], indent=2),
+                    )
 
-                # reset data for the next group of sentences
-                sentences = [sentence]
-                continue
+            # reset data for the next group of sentences
+            sentences = [sentence]
+            continue
 
-            if len(sentences) == 0:
-                # Wait for first RMC sentence to initialize the data buffer, as it
-                # indicates the start if each group of sentences, and is only sent once
-                continue
+        if len(sentences) == 0:
+            # Wait for first RMC sentence to initialize the data buffer, as it
+            # indicates the start if each group of sentences, and is only sent once
+            continue
 
-            sentences.append(sentence)
+        sentences.append(sentence)
 
 
 def init() -> Queue[PositionData]:
@@ -424,10 +440,20 @@ def init() -> Queue[PositionData]:
     :return: A queue that will contain GPS position data.
     """
     position_queue: Queue[PositionData] = Queue()
+    sentence_queue: Queue[pynmea2.NMEASentence] = Queue()
+
+    threading.Thread(
+        target=reader_thread,
+        args=(sentence_queue,),
+        daemon=True,
+    ).start()
 
     threading.Thread(
         target=worker,
-        args=(position_queue,),
+        args=(
+            sentence_queue,
+            position_queue,
+        ),
         daemon=True,
     ).start()
 
