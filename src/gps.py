@@ -1,47 +1,163 @@
 import datetime
-import json
 import logging
 import math
 import threading
 import time
-from decimal import Decimal
 from queue import Queue
+from typing import Literal, TypeVar
 
-import pynmea2
+import pyubx2
+import pyubx2.ubxtypes_core
 import serial
 
+import config
 import log
-from structs import FAAMode, FixType, PositionData, Quality, Satellite
+from structs import PositionData
+from ubx.hnr_pvt import UbxHnrPvt, parse_ubx_hnr_pvt_message
+from ubx.nav_dgps import parse_ubx_nav_dgps_message
+from ubx.nav_dop import parse_ubx_nav_dop_message
+from ubx.nav_pvt import UbxNavPvt, parse_ubx_nav_pvt_message
+from ubx.shared_types import GnssFixType
 from utils.vector import Vector2D
 
 SERIAL_PORT = "/dev/ttyACM0"
 
 logger = logging.getLogger(__name__)
 
+ENABLED_MESSAGES = [
+    # roll, pitch, heading, accuracy r/p/h
+    "NAV-ATT",
+    # timestamp, valid, gpsFix info, num satellite, lon, lat, height,
+    # speed 2d, heading 2d, pdop accuracy h/b/speed
+    "NAV-PVT",
+    "NAV-DGPS",  # age of DGPS data, DGPS station ID
+    "NAV-DOP",  # gdop, pdop, tdop, vdop, hdop, ndop, edop
+    "NAV-SAT",  # numSvs, (gnssId, svId, carrier-to-noise-ratio, elevation, azimuth)[]
+    "ESF-ALG",  # yaw, pitch, roll
+    "ESF-STATUS",  # fusionMode
+    # timestamp, valid, gpsFix info, lon, lat, height
+    # speed 2d/3d, heading 2d, accuracy h/v/speed
+    "HNR-PVT",
+]
 
-def reader_thread(queue: Queue[pynmea2.NMEASentence]) -> None:
+T = TypeVar("T")
+U = TypeVar("U")
+
+
+def key_from_val(dictionary: dict[T, U], value: U) -> T:
+    """
+    Get dictionary key corresponding to (unique) value.
+
+    :param dict dictionary: dictionary
+    :param object value: unique dictionary value
+    :return: dictionary key
+    :rtype: str
+    :raises: KeyError: if no key found for value
+
+    """
+    val = None
+    for key, val in dictionary.items():
+        if val == value:
+            return key
+    msg = f"No key found for value {value}"
+    raise KeyError(msg)
+
+
+def disable_nmea_messages(ubr: pyubx2.UBXReader) -> None:
+    for message_type in pyubx2.UBX_MSGIDS:
+        if message_type[0:1] in (b"\xf0", b"\xf1"):
+            send_configuration_message(ubr, message_type, 0)
+
+
+def enable_ubx_messages(ubr: pyubx2.UBXReader) -> None:
+    for message_id in ENABLED_MESSAGES:
+        message_type = key_from_val(pyubx2.ubxtypes_core.UBX_MSGIDS, message_id)
+        send_configuration_message(ubr, message_type, 1)
+
+
+def send_configuration_message(
+    ubr: pyubx2.UBXReader,
+    message_type: bytes,
+    message_rate: Literal[0, 1],
+) -> None:
+    """
+    Set rate for specified message type via CFG-MSG.
+
+    :param str message_id: type of config message
+        (two bytes, first is message class, second is message ID)
+    :param int message_rate: message rate (i.e. every nth position solution)
+    """
+    message_class = int.from_bytes(message_type[0:1], "little", signed=False)
+    message_id = int.from_bytes(message_type[1:2], "little", signed=False)
+
+    # select which receiver ports to apply rate to
+    rates = {}
+    ports = config.Config().GPS.PORTS
+    for port in ports:
+        rates[port] = message_rate
+
+    # create CFG-MSG command
+    msg = pyubx2.UBXMessage(
+        "CFG",
+        "CFG-MSG",
+        pyubx2.SET,
+        msgClass=message_class,
+        msgID=message_id,
+        rateDDC=rates.get("I2C", 0),
+        rateUART1=rates.get("UART1", 0),
+        rateUART2=rates.get("UART2", 0),
+        rateUSB=rates.get("USB", 0),
+        rateSPI=rates.get("SPI", 0),
+    )
+    if not isinstance(ubr.datastream, serial.Serial):
+        error_message = "UBXReader datastream is not a serial port."
+        raise TypeError(error_message)
+    ubr.datastream.write(msg.serialize())
+
+
+def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
     with serial.Serial(SERIAL_PORT, baudrate=115200, timeout=0) as console:
+        ubx_reader = pyubx2.UBXReader(
+            console,
+            protfilter=pyubx2.NMEA_PROTOCOL
+            | pyubx2.UBX_PROTOCOL
+            | pyubx2.RTCM3_PROTOCOL,
+            quitonerror=pyubx2.ERR_LOG,
+            msgmode=pyubx2.GET,
+            errorhandler=None,
+        )
+        # We want to use the UBX protocol to be able to receive interpolated GPS data
+        logger.debug("Disabling NMEA messages")
+        disable_nmea_messages(ubx_reader)
+        logger.debug(
+            "Enabling UBX messages: "
+            "NAV-ATT, NAV-PVT, NAV-DOP, NAV-SAT, ESF-ALG, ESF-STATUS, HNR-PVT",
+        )
+        enable_ubx_messages(ubx_reader)
         while True:
-            sentence = read_next_sentence(console)
-            queue.put(sentence)
+            raw_data, parsed_data = ubx_reader.read()
+            # TODO: check pickle-ability of raw_data and parsed_data
+            log.data("gps", raw_data)
+            if not isinstance(parsed_data, pyubx2.UBXMessage):
+                logger.warning("Received non-UBX message: %s", parsed_data)
+                continue
+            queue.put(parsed_data)
 
 
-def read_next_sentence(console: serial.Serial) -> pynmea2.NMEASentence:
-    while True:
-        data = console.readline().decode()
-        if len(data) == 0:
-            logger.debug("Read empty line from GPS console")
-            continue
-        log.data("gps", data.strip())
-        return pynmea2.parse(data)
-
-
-def wait_for_gps_fix(queue: Queue[pynmea2.NMEASentence]) -> None:
+def wait_for_gps_fix(queue: Queue[pyubx2.UBXMessage]) -> None:
     start = time.time()
 
     while True:
-        sentence = queue.get()
-        if isinstance(sentence, pynmea2.GLL) and sentence.status == "A":
+        message = queue.get()
+
+        if message.identity != "NAV-PVT":
+            continue
+
+        if parse_ubx_nav_pvt_message(message).fix_type in (
+            GnssFixType.FIX_2D,
+            GnssFixType.FIX_3D,
+            GnssFixType.GNSS_AND_DEAD_RECKONING,
+        ):
             logger.info(
                 "GPS Fix found, took %.1f seconds",
                 round(time.time() - start, ndigits=1),
@@ -49,300 +165,13 @@ def wait_for_gps_fix(queue: Queue[pynmea2.NMEASentence]) -> None:
             return
 
 
-def parse_lat_lon(val: str) -> float:
-    """
-    Parse latitude or longitude from a NMEA sentence.
-
-    The value is expected to be in the format "(d)ddmm.mmmm...", where:
-    - "(d)dd" is the degrees part (2-3 digits)
-    - "mm.mmmm..." is the minutes part (2 digits and decimal)
-    The function converts this to a float representing the value in decimal degrees.
-
-    :param val: Latitude or longitude value in NMEA format.
-    :return: Parsed value in degrees.
-    """
-    degrees = int(val.split(".")[0][:-2])
-    minutes = float(val.split(".")[0][-2:] + "." + val.split(".")[1])
-    return degrees + (minutes / 60)
-
-
-def rmc_to_position_data(
-    sentence: pynmea2.RMC,
-) -> PositionData:
-    """
-    Initialize a PositionData object from an RMC sentence.
-
-    :param sentence: RMC sentence to extract data from.
-    :return: PositionData object with the extracted data.
-    """
-    # assert the sentence field instances to satisfy typechecking
-    if not (
-        isinstance(sentence.datestamp, datetime.date)
-        and isinstance(sentence.timestamp, datetime.time)
-        and sentence.status in ("A", "V")
-        and sentence.lat is not None
-        and sentence.lat_dir in ("N", "S", "")
-        and sentence.lon is not None
-        and sentence.lon_dir in ("E", "W", "")
-        and (
-            isinstance(sentence.spd_over_grnd, float) or sentence.spd_over_grnd is None
-        )
-        and (isinstance(sentence.true_course, float) or sentence.true_course is None)
-        and sentence.mag_variation is not None
-        and sentence.mag_var_dir in ("E", "W", "")
-    ):
-        error_message = "Error while parsing RMC sentence."
-        raise TypeError(error_message)
-
-    # Combine date and time into a single datetime object
-    dt = datetime.datetime(
-        year=sentence.datestamp.year,
-        month=sentence.datestamp.month,
-        day=sentence.datestamp.day,
-        hour=sentence.timestamp.hour,
-        minute=sentence.timestamp.minute,
-        second=sentence.timestamp.second,
-        tzinfo=sentence.timestamp.tzinfo,
-    )
-    timestamp = int(dt.timestamp())
-    latitude = (
-        (parse_lat_lon(sentence.lat) * 1 if sentence.lat_dir == "N" else -1)
-        if sentence.lat != "" and sentence.lat_dir != ""
-        else None
-    )
-    longitude = (
-        (parse_lat_lon(sentence.lon) * 1 if sentence.lon_dir == "E" else -1)
-        if sentence.lon != "" and sentence.lon_dir != ""
-        else None
-    )
-    magnetic_variation = (
-        (float(sentence.mag_variation) * 1 if sentence.mag_var_dir == "E" else -1)
-        if sentence.mag_variation != "" and sentence.mag_var_dir != ""
-        else None
-    )
-    return PositionData(
-        timestamp=timestamp,
-        status=sentence.status,
-        latitude=latitude,
-        longitude=longitude,
-        speed=sentence.spd_over_grnd,
-        true_course=sentence.true_course,
-        magnetic_variation=magnetic_variation,
-        faa_mode=FAAMode(sentence.mode_indicator),
-        satellites_in_view=set(),
-    )
-
-
-def add_vtg_to_position_data(
-    data: PositionData,
-    sentence: pynmea2.VTG,
-) -> None:
-    if not (
-        isinstance(sentence.mag_track, (float, Decimal)) or sentence.mag_track is None
-    ):
-        error_message = "Error while parsing VTG sentence."
-        raise TypeError(error_message)
-    data.magnetic_course = (
-        float(sentence.mag_track) if sentence.mag_track is not None else None
-    )
-
-
-def add_gga_to_position_data(
-    data: PositionData,
-    sentence: pynmea2.GGA,
-) -> None:
-    """
-    Add GGA sentence data to the PositionData object.
-
-    :param data: PositionData object to update.
-    :param sentence: GGA sentence to extract data from.
-    """
-    if not (
-        isinstance(sentence.gps_qual, int)
-        and sentence.num_sats is not None
-        and (isinstance(sentence.altitude, float) or sentence.altitude is None)
-        and sentence.horizontal_dil is not None
-        and sentence.geo_sep is not None
-        and sentence.age_gps_data is not None
-        and sentence.ref_station_id is not None
-    ):
-        error_message = "Error while parsing GGA sentence."
-        raise TypeError(error_message)
-    data.quality = Quality(sentence.gps_qual)
-    data.number_satellites_used = int(sentence.num_sats)
-    data.horizontal_dilution_of_precision = float(sentence.horizontal_dil)
-    data.altitude = sentence.altitude
-    data.geoidal_separation = (
-        float(sentence.geo_sep) if sentence.geo_sep != "" else None
-    )
-    if sentence.age_gps_data != "":
-        data.differential_gps_data_age = int(sentence.age_gps_data)
-    if sentence.ref_station_id != "":
-        data.differential_reference_station_id = int(sentence.ref_station_id)
-
-
-def add_gsa_to_position_data(
-    data: PositionData,
-    sentence: pynmea2.GSA,
-) -> None:
-    """
-    Add GSA sentence data to the PositionData object.
-
-    :param data: PositionData object to update.
-    :param sentence: GSA sentence to extract data from.
-    """
-    if not (
-        sentence.mode_fix_type is not None
-        and sentence.pdop is not None
-        and sentence.vdop is not None
-    ):
-        error_message = "Error while parsing GSA sentence."
-        raise TypeError(error_message)
-
-    data.fix_type = FixType(int(sentence.mode_fix_type))
-    data.positional_dilution_of_precision = float(sentence.pdop)
-    data.vertical_dilution_of_precision = float(sentence.vdop)
-
-    used_satellites: list[int] = []
-    fields = [
-        sentence.sv_id01,
-        sentence.sv_id02,
-        sentence.sv_id03,
-        sentence.sv_id04,
-        sentence.sv_id05,
-        sentence.sv_id06,
-        sentence.sv_id07,
-        sentence.sv_id08,
-        sentence.sv_id09,
-        sentence.sv_id10,
-        sentence.sv_id11,
-        sentence.sv_id12,
-    ]
-    for field in fields:
-        if not isinstance(field, str):
-            error_message = (
-                "Error while parsing GSA sentence. expected field to contain string."
-            )
-            raise TypeError(error_message)
-        if field == "":
-            continue
-        used_satellites.append(int(field))
-    data.used_satellites = used_satellites
-
-
-def add_gsv_to_satellites_in_view(
-    satellites: set[Satellite],
-    sentence: pynmea2.GSV,
-) -> None:
-    """
-    Add the satellites from a GSV sentence to the satellites in view set.
-
-    :param satellites: set of satellites to update.
-    :param sentence: GSV sentence to extract data from.
-    """
-
-    def add_satellite(
-        prn_num: str | None,
-        elevation_deg: str | None,
-        azimuth: str | None,
-        snr: str | None,
-    ) -> None:
-        if prn_num == "" or prn_num is None or elevation_deg is None or azimuth is None:
-            return
-        satellites.add(
-            Satellite(
-                id=int(prn_num),
-                elevation=int(elevation_deg),
-                azimuth=int(azimuth),
-                signal_to_noise_ratio=(
-                    int(snr) if snr is not None and snr != "" else None
-                ),
-            ),
-        )
-
-    add_satellite(
-        sentence.sv_prn_num_1,
-        sentence.elevation_deg_1,
-        sentence.azimuth_1,
-        sentence.snr_1,
-    )
-    add_satellite(
-        sentence.sv_prn_num_2,
-        sentence.elevation_deg_2,
-        sentence.azimuth_2,
-        sentence.snr_2,
-    )
-    add_satellite(
-        sentence.sv_prn_num_3,
-        sentence.elevation_deg_3,
-        sentence.azimuth_3,
-        sentence.snr_3,
-    )
-    add_satellite(
-        sentence.sv_prn_num_4,
-        sentence.elevation_deg_4,
-        sentence.azimuth_4,
-        sentence.snr_4,
-    )
-
-
-def process_sentences(sentences: list[pynmea2.NMEASentence]) -> PositionData:
-    if len(sentences) == 0:
-        error_message = "No sentences provided."
-        raise ValueError(error_message)
-    if not isinstance(sentences[0], pynmea2.RMC):
-        error_message = "First sentence must be RMC."
-        raise TypeError(error_message)
-
-    data = rmc_to_position_data(sentences[0])
-
-    for sentence in sentences[1:]:
-        if isinstance(sentence, pynmea2.RMC):
-            # RMC: Recommended Minimum Navigation Information
-            error_message = "RMC sentence found in the middle of a group of sentences, "
-            raise TypeError(error_message)
-
-        if isinstance(sentence, pynmea2.VTG):
-            # VTG: Track made good and Ground speed
-
-            add_vtg_to_position_data(data, sentence)
-            continue
-
-        if isinstance(sentence, pynmea2.GGA):
-            # GGA: Global Positioning System Fix Data, Time, Position and
-            # fix related data for a GPS receiver.
-
-            add_gga_to_position_data(data, sentence)
-            continue
-
-        if isinstance(sentence, pynmea2.GSA):
-            # GSA: GPS DOP and active satellites
-            add_gsa_to_position_data(data, sentence)
-            continue
-
-        if isinstance(sentence, pynmea2.GSV):
-            # GSV: Satellites in view  # noqa: ERA001
-            add_gsv_to_satellites_in_view(data.satellites_in_view, sentence)
-            continue
-
-        if isinstance(sentence, pynmea2.GLL):
-            # GLL: Geographic Position - Latitude/Longitude
-            # This sentence only contains information we already possess
-            continue
-
-        error_message = f"Unsupported NMEA sentence type: {type(sentence)}"
-        raise TypeError(error_message)
-
-    return data
-
-
 def log_position_info(last_position: PositionData, position: PositionData) -> None:
-    if last_position.status == "A" and position.status == "V":
+    if last_position.valid and not position.valid:
         logger.info("GPS fix lost")
-    elif last_position.status == "V" and position.status == "A":
+    elif not last_position.valid and position.valid:
         logger.info("GPS fix reacquired")
     elif (
-        last_position.status == "A" and position.status == "A"
+        last_position.valid and position.valid
     ) and logger.getEffectiveLevel() <= logging.DEBUG:
         if not (
             last_position.latitude is not None
@@ -383,7 +212,7 @@ def log_position_info(last_position: PositionData, position: PositionData) -> No
 
 
 def worker(
-    sentence_queue: Queue[pynmea2.NMEASentence],
+    message_queue: Queue[pyubx2.UBXMessage],
     position_queue: Queue[PositionData],
 ) -> None:
     """
@@ -392,45 +221,73 @@ def worker(
     :param position_queue: Queue to output GPS position data to.
     """
     # Wait for first GPS fix
-    wait_for_gps_fix(sentence_queue)
+    wait_for_gps_fix(message_queue)
 
-    sentences: list[pynmea2.NMEASentence] = []
+    differential_gps_data_age: int | None = None
+    differential_reference_station_id: int | None = None
+    number_of_satellites_used: int | None = None
+    positional_dilution_of_precision: float | None = None
+    horizontal_dilution_of_precision: float | None = None
     last_position: PositionData | None = None
 
+    def submit_position_data(message: UbxNavPvt | UbxHnrPvt) -> None:
+        nonlocal last_position
+
+        position = PositionData(
+            timestamp=int(
+                datetime.datetime(
+                    year=message.year,
+                    month=message.month,
+                    day=message.day,
+                    hour=message.hour,
+                    minute=message.minute,
+                    second=message.second,
+                    tzinfo=datetime.UTC,
+                ).timestamp(),
+            ),
+            valid=message.fix_type
+            in (
+                GnssFixType.FIX_2D,
+                GnssFixType.FIX_3D,
+                GnssFixType.GNSS_AND_DEAD_RECKONING,
+            ),
+            latitude=message.lat,
+            longitude=message.lon,
+            altitude=message.height,
+            geoidal_separation=message.height - message.h_msl,
+            speed=message.g_speed,
+            true_course=message.head_mot,
+            differential_gps_data_age=differential_gps_data_age,
+            differential_reference_station_id=differential_reference_station_id,
+            number_satellites_used=number_of_satellites_used,
+            positional_dilution_of_precision=positional_dilution_of_precision,
+            horizontal_dilution_of_precision=horizontal_dilution_of_precision,
+        )
+
+        if last_position is not None:
+            log_position_info(last_position, position)
+        last_position = position
+        if position.valid:
+            position_queue.put(position)
+
     while True:
-        sentence = sentence_queue.get()
-        if isinstance(sentence, pynmea2.RMC):
-            # RMC: Recommended Minimum Navigation Information
-            if len(sentences) > 0:
-                try:
-                    logger.debug("Read %d sentences", len(sentences))
-                    position = process_sentences(sentences)
-                    if last_position is not None:
-                        log_position_info(last_position, position)
-                    last_position = position
-
-                    # only submit valid position data
-                    if position.status == "A":
-                        position_queue.put(position)
-                except Exception:
-                    logger.exception(
-                        "Error processing sentences.",
-                    )
-                    logger.error(  # noqa: TRY400
-                        "Encountered while processing Sentences: %s",
-                        json.dumps([str(s) for s in sentences], indent=2),
-                    )
-
-            # reset data for the next group of sentences
-            sentences = [sentence]
-            continue
-
-        if len(sentences) == 0:
-            # Wait for first RMC sentence to initialize the data buffer, as it
-            # indicates the start if each group of sentences, and is only sent once
-            continue
-
-        sentences.append(sentence)
+        message = message_queue.get()
+        if message.identity == "NAV-DGPS":
+            nav_dgps_message = parse_ubx_nav_dgps_message(message)
+            differential_gps_data_age = nav_dgps_message.age
+            differential_reference_station_id = nav_dgps_message.base_id
+        elif message.identity == "NAV-DOP":
+            nav_dop_message = parse_ubx_nav_dop_message(message)
+            positional_dilution_of_precision = nav_dop_message.p_dop
+            horizontal_dilution_of_precision = nav_dop_message.h_dop
+        elif message.identity == "NAV-PVT":
+            message = parse_ubx_nav_pvt_message(message)
+            number_of_satellites_used = message.num_sv
+            positional_dilution_of_precision = message.p_dop
+            submit_position_data(message)
+        elif message.identity == "HNR-PVT":
+            hnr_pvt_message = parse_ubx_hnr_pvt_message(message)
+            submit_position_data(hnr_pvt_message)
 
 
 def init() -> Queue[PositionData]:
@@ -440,18 +297,18 @@ def init() -> Queue[PositionData]:
     :return: A queue that will contain GPS position data.
     """
     position_queue: Queue[PositionData] = Queue()
-    sentence_queue: Queue[pynmea2.NMEASentence] = Queue()
+    message_queue: Queue[pyubx2.UBXMessage] = Queue()
 
     threading.Thread(
         target=reader_thread,
-        args=(sentence_queue,),
+        args=(message_queue,),
         daemon=True,
     ).start()
 
     threading.Thread(
         target=worker,
         args=(
-            sentence_queue,
+            message_queue,
             position_queue,
         ),
         daemon=True,

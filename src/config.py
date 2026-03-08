@@ -2,7 +2,7 @@ import configparser
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,15 @@ class MQTTConfig:
     QUEUE_SIZE: int
 
 
+GPSPort = Literal["I2C", "UART1", "UART2", "USB", "SPI"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class GPSConfig:
+    SERIAL_PORT: str
+    PORTS: list[GPSPort]
+
+
 class Config:
     """Singleton class to manage configuration settings."""
 
@@ -47,6 +56,7 @@ class Config:
     LOGGING: LoggingConfig
     NETWORK: NetworkConfig
     MQTT: MQTTConfig
+    GPS: GPSConfig
 
     def __new__(cls) -> "Config":
         if cls._instance is None:
@@ -140,6 +150,18 @@ class Config:
             USERNAME=config.get("MQTT", "USERNAME", fallback=None),
             PASSWORD=config.get("MQTT", "PASSWORD", fallback=None),
             QUEUE_SIZE=get(config, "MQTT", "QUEUE_SIZE", int, 5),
+        )
+        ports: list[GPSPort] = ["I2C", "UART1", "UART2", "USB", "SPI"]
+        self.GPS = GPSConfig(
+            SERIAL_PORT=get(config, "GPS", "SERIAL_PORT", str, "/dev/ttyUSB0"),
+            PORTS=[
+                port
+                for port in (
+                    x.strip()
+                    for x in get(config, "GPS", "PORTS", str, "USB").split(",")
+                )
+                if port in ports
+            ],
         )
 
     def __repr__(self) -> str:

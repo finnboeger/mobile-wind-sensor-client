@@ -3,3 +3,4 @@ n2k>=0.5.0
 paho-mqtt>=2.1.0
 pynmea2>=1.19
 pyserial>=3.5
+pyubx2>=1.2.53
