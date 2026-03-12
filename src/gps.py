@@ -136,12 +136,11 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
         enable_ubx_messages(ubx_reader)
         while True:
             raw_data, parsed_data = ubx_reader.read()
-            # TODO: check pickle-ability of raw_data and parsed_data
-            log.data("gps", raw_data)
             if not isinstance(parsed_data, pyubx2.UBXMessage):
                 logger.warning("Received non-UBX message: %s", parsed_data)
                 continue
             queue.put(parsed_data)
+            log.data("gps", parsed_data)
 
 
 def wait_for_gps_fix(queue: Queue[pyubx2.UBXMessage]) -> None:
@@ -267,6 +266,8 @@ def worker(
         if last_position is not None:
             log_position_info(last_position, position)
         last_position = position
+
+        log.data("position", position)
         if position.valid:
             position_queue.put(position)
 

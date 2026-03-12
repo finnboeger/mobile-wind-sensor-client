@@ -6,6 +6,7 @@ from queue import Queue
 import n2k
 
 import config
+import log
 from structs import (
     ApparentWindData,
     CorrectedApparentWindData,
@@ -186,6 +187,8 @@ def worker(
         average_apparent_wind = CorrectedApparentWindData(
             **asdict(apparent_wind_buffer.average_wind_data()),
         )
+
+        log.data("true_wind", average_true_wind)
 
         if logger.getEffectiveLevel() <= logging.DEBUG:
             logger.debug(

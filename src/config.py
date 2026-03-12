@@ -18,7 +18,8 @@ class LoggingConfig:
     LOG_LEVEL: int
     MAX_LOG_SIZE: int
     MAX_LOG_FILES: int
-    DATA_LOG_FILE: str | None
+    DATA_LOG_DIR: str | None
+    MAX_DATA_LOG_SIZE: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -122,7 +123,14 @@ class Config:
             ),
             MAX_LOG_SIZE=get(config, "LOGGING", "MAX_LOG_SIZE", int, 5000),
             MAX_LOG_FILES=get(config, "LOGGING", "MAX_LOG_FILES", int, 10),
-            DATA_LOG_FILE=config.get("LOGGING", "DATA_LOG_FILE", fallback=None),
+            DATA_LOG_DIR=config.get("LOGGING", "DATA_LOG_DIR", fallback=None),
+            MAX_DATA_LOG_SIZE=get(
+                config,
+                "LOGGING",
+                "MAX_DATA_LOG_SIZE",
+                int,
+                100 * 1000,
+            ),
         )
         self.NETWORK = NetworkConfig(
             INTERFACE_PRIORITY=[
