@@ -9,6 +9,7 @@ from typing import Literal, TypeVar
 import pyubx2
 import pyubx2.ubxtypes_core
 import serial
+from n2k.utils import meters_per_second_to_knots
 
 import config
 import log
@@ -252,9 +253,9 @@ def worker(
             ),
             latitude=message.lat,
             longitude=message.lon,
-            altitude=message.height,
-            geoidal_separation=message.height - message.h_msl,
-            speed=message.g_speed,
+            altitude=message.height / 1000,
+            geoidal_separation=(message.height - message.h_msl) / 1000,
+            speed=meters_per_second_to_knots(message.g_speed / 1000),
             true_course=message.head_mot,
             differential_gps_data_age=differential_gps_data_age,
             differential_reference_station_id=differential_reference_station_id,
@@ -275,7 +276,7 @@ def worker(
         message = message_queue.get()
         if message.identity == "NAV-DGPS":
             nav_dgps_message = parse_ubx_nav_dgps_message(message)
-            differential_gps_data_age = nav_dgps_message.age
+            differential_gps_data_age = nav_dgps_message.age // 1000
             differential_reference_station_id = nav_dgps_message.base_id
         elif message.identity == "NAV-DOP":
             nav_dop_message = parse_ubx_nav_dop_message(message)
