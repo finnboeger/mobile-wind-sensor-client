@@ -117,7 +117,7 @@ def send_configuration_message(
 
 
 def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
-    with serial.Serial(SERIAL_PORT, baudrate=115200, timeout=0) as console:
+    with serial.Serial(SERIAL_PORT, baudrate=115200, timeout=1) as console:
         ubx_reader = pyubx2.UBXReader(
             console,
             protfilter=pyubx2.NMEA_PROTOCOL
@@ -137,6 +137,9 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
         enable_ubx_messages(ubx_reader)
         while True:
             raw_data, parsed_data = ubx_reader.read()
+            if parsed_data is None:
+                # No messages waiting in buffer
+                continue
             if not isinstance(parsed_data, pyubx2.UBXMessage):
                 logger.warning("Received non-UBX message: %s", parsed_data)
                 continue
