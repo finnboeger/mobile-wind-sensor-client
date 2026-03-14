@@ -44,21 +44,21 @@ class UbxHnrPvt:
     #: Height above ellipsoid [mm]
     height: int
     #: Height above mean sea level [mm]
-    h_msl: int
+    height_above_mean_sea_level: int
     #: Ground Speed (2-D) [mm/s]
-    g_speed: int
+    ground_speed: int
     #: Heading of motion (2-D) [deg]
-    head_mot: float
+    heading_of_motion: float
     #: Heading of vehicle (2-D) [deg]
-    head_veh: float
+    heading_of_vehicle: float
     #: Horizontal accuracy estimate [mm]
-    h_acc: int
+    horizontal_accuracy: int
     #: Vertical accuracy estimate [mm]
-    v_acc: int
+    vertical_accuracy: int
     #: Speed accuracy estimate [mm/s]
-    s_acc: int
+    speed_accuracy: int
     #: Heading accuracy estimate [deg]
-    head_acc: float
+    heading_accuracy: float
 
 
 def parse_ubx_hnr_pvt_message(msg: UBXMessage) -> UbxHnrPvt:
@@ -81,7 +81,7 @@ def parse_ubx_hnr_pvt_message(msg: UBXMessage) -> UbxHnrPvt:
         fully_resolved=getattr(msg, "fullyResolved"),
         fix_type=GnssFixType(
             getattr(msg, "gpsFix"),
-        ),  # HNR uses 'gpsFix' field name usually
+        ),
         gps_fix_ok=bool(getattr(msg, "GPSfixOK")),
         dgps_used=bool(getattr(msg, "DiffSoln")),
         week_number_set=bool(getattr(msg, "WKNSET")),
@@ -90,12 +90,12 @@ def parse_ubx_hnr_pvt_message(msg: UBXMessage) -> UbxHnrPvt:
         lon=getattr(msg, "lon"),
         lat=getattr(msg, "lat"),
         height=getattr(msg, "height"),
-        h_msl=getattr(msg, "hMSL"),
-        g_speed=getattr(msg, "gSpeed"),
-        head_mot=getattr(msg, "headMot"),
-        head_veh=getattr(msg, "headVeh"),
-        h_acc=getattr(msg, "hAcc"),
-        v_acc=getattr(msg, "vAcc"),
-        s_acc=getattr(msg, "sAcc"),
-        head_acc=getattr(msg, "headAcc"),
+        height_above_mean_sea_level=getattr(msg, "hMSL"),
+        ground_speed=getattr(msg, "gSpeed"),
+        heading_of_motion=getattr(msg, "headMot"),
+        heading_of_vehicle=getattr(msg, "headVeh"),
+        horizontal_accuracy=getattr(msg, "hAcc"),
+        vertical_accuracy=getattr(msg, "vAcc"),
+        speed_accuracy=getattr(msg, "sAcc"),
+        heading_accuracy=getattr(msg, "headAcc"),
     )

@@ -28,15 +28,15 @@ class UbxNavPvt:
     minute: int
     #: Seconds of minute, range 0..60 (UTC)
     second: int
+    #: Fraction of second, range -1e9 .. 1e9 (UTC) [ns]
+    nano: int
     #: Validity flags
     valid_date: bool
     valid_time: bool
     fully_resolved: bool
-    valid_mag: bool
+    valid_magnetic_declination: bool
     #: Time accuracy estimate (UTC) [ns]
-    t_acc: int
-    #: Fraction of second, range -1e9 .. 1e9 (UTC) [ns]
-    nano: int
+    time_accuracy: int
     #: GNSSfix Type
     fix_type: GnssFixType
     #: Fix status flags
@@ -58,11 +58,11 @@ class UbxNavPvt:
     #: Height above ellipsoid [mm]
     height: int
     #: Height above mean sea level [mm]
-    h_msl: int
+    height_above_mean_sea_level: int
     #: Horizontal accuracy estimate [mm]
-    h_acc: int
+    horizontal_accuracy: int
     #: Vertical accuracy estimate [mm]
-    v_acc: int
+    vertical_accuracy: int
     #: NED north velocity [mm/s]
     vel_n: int
     #: NED east velocity [mm/s]
@@ -70,13 +70,13 @@ class UbxNavPvt:
     #: NED down velocity [mm/s]
     vel_d: int
     #: Ground Speed (2-D) [mm/s]
-    g_speed: int
+    ground_speed: int
     #: Heading of motion (2-D) [deg]
-    head_mot: float
+    heading_of_motion: float
     #: Speed accuracy estimate [mm/s]
-    s_acc: int
+    speed_accuracy: int
     #: Heading accuracy estimate [deg]
-    head_acc: float
+    heading_accuracy: float
     #: Position DOP
     p_dop: float
     # Flags3
@@ -89,11 +89,11 @@ class UbxNavPvt:
     #:  Navigation Message Authentication (NMA) methods
     nma_fix_status: bool
     #: Heading of vehicle (2-D) [deg]
-    head_veh: float
+    heading_of_vehicle: float
     #: Magnetic declination [deg]
-    mag_dec: float
+    magnetic_declination: float
     #: Magnetic declination accuracy [deg]
-    mag_acc: float
+    magnetic_declination_accuracy: float
 
 
 def parse_ubx_nav_pvt_message(msg: UBXMessage) -> UbxNavPvt:
@@ -113,8 +113,8 @@ def parse_ubx_nav_pvt_message(msg: UBXMessage) -> UbxNavPvt:
         valid_date=bool(getattr(msg, "validDate")),
         valid_time=bool(getattr(msg, "validTime")),
         fully_resolved=bool(getattr(msg, "fullyResolved")),
-        valid_mag=bool(getattr(msg, "validMag")),
-        t_acc=getattr(msg, "tAcc"),
+        valid_magnetic_declination=bool(getattr(msg, "validMag")),
+        time_accuracy=getattr(msg, "tAcc"),
         nano=getattr(msg, "nano"),
         fix_type=GnssFixType(getattr(msg, "fixType")),
         gnss_fix_ok=bool(getattr(msg, "gnssFixOk")),
@@ -129,22 +129,22 @@ def parse_ubx_nav_pvt_message(msg: UBXMessage) -> UbxNavPvt:
         lon=getattr(msg, "lon"),
         lat=getattr(msg, "lat"),
         height=getattr(msg, "height"),
-        h_msl=getattr(msg, "hMSL"),
-        h_acc=getattr(msg, "hAcc"),
-        v_acc=getattr(msg, "vAcc"),
+        height_above_mean_sea_level=getattr(msg, "hMSL"),
+        horizontal_accuracy=getattr(msg, "hAcc"),
+        vertical_accuracy=getattr(msg, "vAcc"),
         vel_n=getattr(msg, "velN"),
         vel_e=getattr(msg, "velE"),
         vel_d=getattr(msg, "velD"),
-        g_speed=getattr(msg, "gSpeed"),
-        head_mot=getattr(msg, "headMot"),
-        s_acc=getattr(msg, "sAcc"),
-        head_acc=getattr(msg, "headAcc"),
+        ground_speed=getattr(msg, "gSpeed"),
+        heading_of_motion=getattr(msg, "headMot"),
+        speed_accuracy=getattr(msg, "sAcc"),
+        heading_accuracy=getattr(msg, "headAcc"),
         p_dop=getattr(msg, "pDOP"),
         invalid_lon_lat_height=bool(getattr(msg, "invalidLlh")),
         last_correction_age=LastCorrectionAge(getattr(msg, "lastCorrectionAge")),
         authenticated_time=bool(getattr(msg, "authTime")),
         nma_fix_status=bool(getattr(msg, "nmaFixStatus")),
-        head_veh=getattr(msg, "headVeh"),
-        mag_dec=getattr(msg, "magDec"),
-        mag_acc=getattr(msg, "magAcc"),
+        heading_of_vehicle=getattr(msg, "headVeh"),
+        magnetic_declination=getattr(msg, "magDec"),
+        magnetic_declination_accuracy=getattr(msg, "magAcc"),
     )

@@ -257,9 +257,10 @@ def worker(
             latitude=message.lat,
             longitude=message.lon,
             altitude=message.height / 1000,
-            geoidal_separation=(message.height - message.h_msl) / 1000,
-            speed=meters_per_second_to_knots(message.g_speed / 1000),
-            true_course=message.head_mot,
+            geoidal_separation=(message.height - message.height_above_mean_sea_level)
+            / 1000,
+            speed=meters_per_second_to_knots(message.ground_speed / 1000),
+            true_course=message.heading_of_motion,
             differential_gps_data_age=differential_gps_data_age,
             differential_reference_station_id=differential_reference_station_id,
             number_satellites_used=number_of_satellites_used,
