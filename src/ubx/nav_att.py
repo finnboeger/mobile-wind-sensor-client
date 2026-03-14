@@ -32,12 +32,12 @@ def parse_ubx_nav_att_message(msg: UBXMessage) -> UbxNavAtt:
         raise ValueError(error)
 
     return UbxNavAtt(
-        i_tow=getattr(msg, "iTOW", 0),
-        version=getattr(msg, "version", 0),
-        roll=getattr(msg, "roll", 0.0),
-        pitch=getattr(msg, "pitch", 0.0),
-        heading=getattr(msg, "heading", 0.0),
-        acc_roll=getattr(msg, "accRoll", 0.0),
-        acc_pitch=getattr(msg, "accPitch", 0.0),
-        acc_heading=getattr(msg, "accHeading", 0.0),
+        i_tow=getattr(msg, "iTOW"),
+        version=getattr(msg, "version"),
+        roll=getattr(msg, "roll"),
+        pitch=getattr(msg, "pitch"),
+        heading=getattr(msg, "heading"),
+        acc_roll=getattr(msg, "accRoll"),
+        acc_pitch=getattr(msg, "accPitch"),
+        acc_heading=getattr(msg, "accHeading"),
     )

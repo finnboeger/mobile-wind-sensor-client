@@ -30,11 +30,11 @@ def parse_ubx_esf_alg_message(msg: UBXMessage) -> UbxEsfAlg:
         raise ValueError(error)
 
     return UbxEsfAlg(
-        i_tow=getattr(msg, "iTOW", 0),
-        version=getattr(msg, "version", 0),
-        flags=getattr(msg, "flags", 0),
-        errors=getattr(msg, "errors", 0),
-        yaw=getattr(msg, "yaw", 0.0),
-        pitch=getattr(msg, "pitch", 0.0),
-        roll=getattr(msg, "roll", 0.0),
+        i_tow=getattr(msg, "iTOW"),
+        version=getattr(msg, "version"),
+        flags=getattr(msg, "flags"),
+        errors=getattr(msg, "errors"),
+        yaw=getattr(msg, "yaw"),
+        pitch=getattr(msg, "pitch"),
+        roll=getattr(msg, "roll"),
     )

@@ -48,27 +48,27 @@ def parse_ubx_nav_dgps_message(msg: UBXMessage) -> UbxNavDgps:
         raise ValueError(error)
 
     sv_list = []
-    num_ch = getattr(msg, "numCh", 0)
+    num_ch = getattr(msg, "numCh")
 
     for i in range(1, num_ch + 1):
         idx = f"{i:02d}"
         sv_list.append(
             NavDgpsSv(
-                sv_id=getattr(msg, f"svid_{idx}", 0),
-                flags=getattr(msg, f"flags_{idx}", 0),
-                age_c=getattr(msg, f"ageC_{idx}", 0),
-                prc=getattr(msg, f"prc_{idx}", 0.0),
-                prrc=getattr(msg, f"prrc_{idx}", 0.0),
+                sv_id=getattr(msg, f"svid_{idx}"),
+                flags=getattr(msg, f"flags_{idx}"),
+                age_c=getattr(msg, f"ageC_{idx}"),
+                prc=getattr(msg, f"prc_{idx}"),
+                prrc=getattr(msg, f"prrc_{idx}"),
             ),
         )
 
     return UbxNavDgps(
-        i_tow=getattr(msg, "iTOW", 0),
-        age=getattr(msg, "age", 0),
-        base_id=getattr(msg, "baseId", 0),
-        base_health=getattr(msg, "baseHealth", 0),
+        i_tow=getattr(msg, "iTOW"),
+        age=getattr(msg, "age"),
+        base_id=getattr(msg, "baseId"),
+        base_health=getattr(msg, "baseHealth"),
         num_ch=num_ch,
-        status=getattr(msg, "status", 0),
-        reserved1=getattr(msg, "reserved1", 0),
+        status=getattr(msg, "status"),
+        reserved1=getattr(msg, "reserved1"),
         svs=sv_list,
     )

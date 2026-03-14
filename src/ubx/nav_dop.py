@@ -32,12 +32,12 @@ def parse_ubx_nav_dop_message(msg: UBXMessage) -> UbxNavDop:
         raise ValueError(error)
 
     return UbxNavDop(
-        i_tow=getattr(msg, "iTOW", 0),
-        g_dop=getattr(msg, "gDOP", 0.0),
-        p_dop=getattr(msg, "pDOP", 0.0),
-        t_dop=getattr(msg, "tDOP", 0.0),
-        v_dop=getattr(msg, "vDOP", 0.0),
-        h_dop=getattr(msg, "hDOP", 0.0),
-        n_dop=getattr(msg, "nDOP", 0.0),
-        e_dop=getattr(msg, "eDOP", 0.0),
+        i_tow=getattr(msg, "iTOW"),
+        g_dop=getattr(msg, "gDOP"),
+        p_dop=getattr(msg, "pDOP"),
+        t_dop=getattr(msg, "tDOP"),
+        v_dop=getattr(msg, "vDOP"),
+        h_dop=getattr(msg, "hDOP"),
+        n_dop=getattr(msg, "nDOP"),
+        e_dop=getattr(msg, "eDOP"),
     )

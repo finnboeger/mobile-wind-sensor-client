@@ -56,6 +56,9 @@ ignore = [
     "PLR2004", # Magic value used in comparison
     "D", # Don't care about docstrings in tests
 ]
+"src/ubx/*.py" = [
+    "B009", # allow using getattr without a default
+]
 
 [tool.ruff.format]
 quote-style = "double"

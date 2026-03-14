@@ -30,14 +30,14 @@ def parse_ubx_esf_status_message(msg: UBXMessage) -> UbxEsfStatus:
         raise ValueError(error)
 
     sensor_list = []
-    num_sens = getattr(msg, "numSens", 0)
+    num_sens = getattr(msg, "numSens")
 
     for i in range(1, num_sens + 1):
         idx = f"{i:02d}"
 
-        s1 = getattr(msg, f"sensStatus1_{idx}", 0)
-        s2 = getattr(msg, f"sensStatus2_{idx}", 0)
-        freq = getattr(msg, f"freq_{idx}", 0)
+        s1 = getattr(msg, f"sensStatus1_{idx}")
+        s2 = getattr(msg, f"sensStatus2_{idx}")
+        freq = getattr(msg, f"freq_{idx}")
 
         # Parsing sensStatus1
         s_type = s1 & 0x3F
@@ -68,13 +68,13 @@ def parse_ubx_esf_status_message(msg: UBXMessage) -> UbxEsfStatus:
         )
 
     # initStatus is often a tuple or list in pyubx2
-    init_st = getattr(msg, "initStatus", 0)
+    init_st = getattr(msg, "initStatus")
 
     return UbxEsfStatus(
-        i_tow=getattr(msg, "iTOW", 0),
-        version=getattr(msg, "version", 0),
+        i_tow=getattr(msg, "iTOW"),
+        version=getattr(msg, "version"),
         init_status=init_st,
-        fusion_mode=getattr(msg, "fusionMode", 0),
+        fusion_mode=getattr(msg, "fusionMode"),
         num_sens=num_sens,
         sensors=sensor_list,
     )
