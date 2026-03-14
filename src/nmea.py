@@ -111,10 +111,11 @@ def forward_position(
         while not input_queue.empty() or position is None:
             position = input_queue.get()
 
+        timestamp_seconds = position.timestamp // 1000
         message = n2k.messages.create_n2k_gnss_data_message(
             n2k.messages.GNSSPositionData(
-                days_since_1970=position.timestamp // 86400,  # 86400 seconds in a day
-                seconds_since_midnight=position.timestamp % 86400,
+                days_since_1970=timestamp_seconds // 86400,  # 86400 seconds in a day
+                seconds_since_midnight=timestamp_seconds % 86400,
                 latitude=position.latitude,
                 longitude=position.longitude,
                 altitude=position.altitude,

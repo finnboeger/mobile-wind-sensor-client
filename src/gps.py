@@ -238,16 +238,21 @@ def worker(
         nonlocal last_position
 
         position = PositionData(
-            timestamp=int(
-                datetime.datetime(
-                    year=message.year,
-                    month=message.month,
-                    day=message.day,
-                    hour=message.hour,
-                    minute=message.minute,
-                    second=message.second,
-                    tzinfo=datetime.UTC,
-                ).timestamp(),
+            timestamp=(
+                int(
+                    datetime.datetime(
+                        year=message.year,
+                        month=message.month,
+                        day=message.day,
+                        hour=message.hour,
+                        minute=message.minute,
+                        second=message.second,
+                        tzinfo=datetime.UTC,
+                    ).timestamp()
+                    * 1000,
+                )
+                # nanoseconds can be negative, thus we're applying them on the timestamp
+                + message.nano // 1_000_000
             ),
             valid=message.fix_type
             in (

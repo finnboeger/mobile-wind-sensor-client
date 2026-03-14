@@ -143,7 +143,7 @@ def worker(
         # (within 1 second of wind data)
         maximum_allowed_offset = 1000  # in milliseconds
         if (
-            latest_position_time * 1000
+            latest_position_time
             < current_apparent_wind.timestamp - maximum_allowed_offset
         ) or (
             current_heading.timestamp

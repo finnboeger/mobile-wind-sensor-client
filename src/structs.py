@@ -5,7 +5,7 @@ from dataclasses import dataclass
 class PositionData:
     """Positioning data from one GPS fix"""
 
-    #: UTC time of the fix in seconds since epoch
+    #: UTC time of the fix in milliseconds since epoch
     timestamp: int  # Used when forwarding
     #: Fix status
     valid: bool
