@@ -2,6 +2,8 @@ from dataclasses import dataclass
 
 from pyubx2 import UBXMessage
 
+from ubx.shared_types import IMUMountAlignmentStatus
+
 
 @dataclass
 class UbxEsfAlg:
@@ -11,10 +13,16 @@ class UbxEsfAlg:
     i_tow: int
     #: Message version
     version: int
-    #: Flags
-    flags: int
-    #: Error flags
-    errors: int
+    #: Automatic IMU-mount alignment is running
+    automatic_mount_alignment_running: bool
+    #: Status of the IMU-mount alignment
+    status: IMUMountAlignmentStatus
+    #: IMU-mount tilt (roll and/or pitch) alignment error
+    tilt_alg_error: bool
+    #: IMU-mount yaw alignment error
+    yaw_alg_error: bool
+    #: IMU-mount misalignment Euler angle singularity error
+    angle_error: bool
     #: IMU-mount Yaw angle [deg] (Scaled 1e-2)
     yaw: float
     #: IMU-mount Pitch angle [deg] (Scaled 1e-2)
@@ -32,8 +40,14 @@ def parse_ubx_esf_alg_message(msg: UBXMessage) -> UbxEsfAlg:
     return UbxEsfAlg(
         i_tow=getattr(msg, "iTOW"),
         version=getattr(msg, "version"),
-        flags=getattr(msg, "flags"),
-        errors=getattr(msg, "errors"),
+        automatic_mount_alignment_running=getattr(
+            msg,
+            "autoMntAlgOn",
+        ),
+        status=IMUMountAlignmentStatus(getattr(msg, "status")),
+        tilt_alg_error=getattr(msg, "tiltAlgError"),
+        yaw_alg_error=getattr(msg, "yawAlgError"),
+        angle_error=getattr(msg, "angleError"),
         yaw=getattr(msg, "yaw"),
         pitch=getattr(msg, "pitch"),
         roll=getattr(msg, "roll"),

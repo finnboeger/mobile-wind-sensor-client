@@ -23,14 +23,20 @@ class UbxHnrPvt:
     minute: int
     #: Seconds of minute, range 0..60 (UTC)
     second: int
-    #: Validity flags
-    valid: int
     #: Fraction of second, range -1e9 .. 1e9 (UTC) [ns]
     nano: int
+    #: Validity flags
+    valid_date: int
+    valid_time: int
+    fully_resolved: int
     #: GNSSfix Type
     fix_type: GnssFixType
     #: Fix status flags
-    flags: int
+    gps_fix_ok: bool
+    dgps_used: bool
+    week_number_set: bool
+    time_of_week_set: bool
+    heading_of_vehicle_valid: bool
     #: Longitude [deg]
     lon: float
     #: Latitude [deg]
@@ -68,13 +74,19 @@ def parse_ubx_hnr_pvt_message(msg: UBXMessage) -> UbxHnrPvt:
         day=getattr(msg, "day"),
         hour=getattr(msg, "hour"),
         minute=getattr(msg, "min"),
-        second=getattr(msg, "sec"),
-        valid=getattr(msg, "valid"),
+        second=getattr(msg, "second"),
         nano=getattr(msg, "nano"),
+        valid_date=getattr(msg, "validDate"),
+        valid_time=getattr(msg, "validTime"),
+        fully_resolved=getattr(msg, "fullyResolved"),
         fix_type=GnssFixType(
             getattr(msg, "gpsFix"),
         ),  # HNR uses 'gpsFix' field name usually
-        flags=getattr(msg, "flags"),
+        gps_fix_ok=bool(getattr(msg, "GPSfixOK")),
+        dgps_used=bool(getattr(msg, "DiffSoln")),
+        week_number_set=bool(getattr(msg, "WKNSET")),
+        time_of_week_set=bool(getattr(msg, "TOWSET")),
+        heading_of_vehicle_valid=bool(getattr(msg, "headVehValid")),
         lon=getattr(msg, "lon"),
         lat=getattr(msg, "lat"),
         height=getattr(msg, "height"),

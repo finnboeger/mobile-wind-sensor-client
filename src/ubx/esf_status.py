@@ -2,7 +2,14 @@ from dataclasses import dataclass, field
 
 from pyubx2 import UBXMessage
 
-from ubx.shared_types import EsfSensorInfo, EsfSensorStatus, EsfSensorType
+from ubx.shared_types import (
+    EsfFusionMode,
+    EsfSensorCalibrationStatus,
+    EsfSensorInfo,
+    EsfSensorInitializationStatus,
+    EsfSensorTimeStatus,
+    EsfSensorType,
+)
 
 
 @dataclass
@@ -13,10 +20,16 @@ class UbxEsfStatus:
     i_tow: int
     #: Message version
     version: int
-    #: Initialization status
-    init_status: int  # tuple (wtInit, mntAlgStatus, insInitStatus)
+    #: Wheel tick factor initialization status
+    wheel_tick_factor_init_status: EsfSensorInitializationStatus
+    #: Automatic IMU-mount alignment status
+    imu_mount_alignment_status: EsfSensorInitializationStatus
+    #: INS initialization status
+    ins_init_status: EsfSensorInitializationStatus
+    #: IMU initialization status
+    imu_init_status: EsfSensorInitializationStatus
     #: Fusion mode
-    fusion_mode: int
+    fusion_mode: EsfFusionMode
     #: Number of sensors attached
     num_sens: int
     #: List of Sensor Status Objects
@@ -35,46 +48,39 @@ def parse_ubx_esf_status_message(msg: UBXMessage) -> UbxEsfStatus:
     for i in range(1, num_sens + 1):
         idx = f"{i:02d}"
 
-        s1 = getattr(msg, f"sensStatus1_{idx}")
-        s2 = getattr(msg, f"sensStatus2_{idx}")
-        freq = getattr(msg, f"freq_{idx}")
-
-        # Parsing sensStatus1
-        s_type = s1 & 0x3F
-        s_used = bool((s1 >> 6) & 1)
-        s_ready = bool((s1 >> 7) & 1)
-
-        # Parsing sensStatus2
-        s_calib = s2 & 0x03
-        s_time_status = (s2 >> 2) & 0x03
-        # bits 4-15 are faults, we simplify here
-        faults = s2 >> 4
-
         sensor_list.append(
             EsfSensorInfo(
-                type=EsfSensorType(s_type)
-                if s_type in list(map(int, EsfSensorType))
-                else EsfSensorType.NONE,
-                used=s_used,
-                ready=s_ready,
-                calib_status=EsfSensorStatus(s_calib),
-                time_status=s_time_status,
-                freq=freq,
-                faults_bad_meas=bool(faults & 1),
-                faults_bad_tag=bool((faults >> 1) & 1),
-                faults_missing=bool((faults >> 2) & 1),
-                faults_noise=bool((faults >> 3) & 1),
+                type=EsfSensorType(getattr(msg, f"type_{idx}")),
+                used=bool(getattr(msg, f"used_{idx}")),
+                ready=bool(getattr(msg, f"ready_{idx}")),
+                calib_status=EsfSensorCalibrationStatus(
+                    getattr(msg, f"calibStatus_{idx}"),
+                ),
+                time_status=EsfSensorTimeStatus(getattr(msg, f"timeStatus_{idx}")),
+                freq=getattr(msg, f"freq_{idx}"),
+                bad_measurements=bool(getattr(msg, f"badMeas_{idx}")),
+                bad_time_tag=bool(getattr(msg, f"badTTag_{idx}")),
+                missing_measurements=bool(getattr(msg, f"missingMeas_{idx}")),
+                noisy_measurements=bool(getattr(msg, f"noisyMeas_{idx}")),
             ),
         )
-
-    # initStatus is often a tuple or list in pyubx2
-    init_st = getattr(msg, "initStatus")
 
     return UbxEsfStatus(
         i_tow=getattr(msg, "iTOW"),
         version=getattr(msg, "version"),
-        init_status=init_st,
-        fusion_mode=getattr(msg, "fusionMode"),
+        wheel_tick_factor_init_status=EsfSensorInitializationStatus(
+            getattr(msg, "wtInitStatus"),
+        ),
+        imu_mount_alignment_status=EsfSensorInitializationStatus(
+            getattr(msg, "mntAlgStatus"),
+        ),
+        ins_init_status=EsfSensorInitializationStatus(
+            getattr(msg, "insInitStatus"),
+        ),
+        imu_init_status=EsfSensorInitializationStatus(
+            getattr(msg, "imuInitStatus"),
+        ),
+        fusion_mode=EsfFusionMode(getattr(msg, "fusionMode")),
         num_sens=num_sens,
         sensors=sensor_list,
     )

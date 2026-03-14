@@ -2,7 +2,12 @@ from dataclasses import dataclass
 
 from pyubx2 import UBXMessage
 
-from ubx.shared_types import GnssFixType
+from ubx.shared_types import (
+    CarrierPhaseSolution,
+    GnssFixType,
+    LastCorrectionAge,
+    PowerSaveModeState,
+)
 
 
 @dataclass
@@ -24,7 +29,10 @@ class UbxNavPvt:
     #: Seconds of minute, range 0..60 (UTC)
     second: int
     #: Validity flags
-    valid: int
+    valid_date: bool
+    valid_time: bool
+    fully_resolved: bool
+    valid_mag: bool
     #: Time accuracy estimate (UTC) [ns]
     t_acc: int
     #: Fraction of second, range -1e9 .. 1e9 (UTC) [ns]
@@ -32,9 +40,15 @@ class UbxNavPvt:
     #: GNSSfix Type
     fix_type: GnssFixType
     #: Fix status flags
-    flags: int
+    gnss_fix_ok: bool
+    dgps_used: bool
+    power_save_mode: PowerSaveModeState
+    carrier_phase_solution: CarrierPhaseSolution
+    heading_of_vehicle_valid: bool
     #: Additional flags
-    flags2: int
+    date_time_confirmation_available: bool
+    confirmed_date: bool
+    confirmed_time: bool
     #: Number of satellites used in Nav Solution
     num_sv: int
     #: Longitude [deg]
@@ -65,6 +79,15 @@ class UbxNavPvt:
     head_acc: float
     #: Position DOP
     p_dop: float
+    # Flags3
+    #: longitude, latitude and height are invalid
+    invalid_lon_lat_height: bool
+    last_correction_age: LastCorrectionAge
+    #: output time has been validated against external trusted time source
+    authenticated_time: bool
+    #: solution has been verified using data authenticated through
+    #:  Navigation Message Authentication (NMA) methods
+    nma_fix_status: bool
     #: Heading of vehicle (2-D) [deg]
     head_veh: float
     #: Magnetic declination [deg]
@@ -86,13 +109,22 @@ def parse_ubx_nav_pvt_message(msg: UBXMessage) -> UbxNavPvt:
         day=getattr(msg, "day"),
         hour=getattr(msg, "hour"),
         minute=getattr(msg, "min"),
-        second=getattr(msg, "sec"),
-        valid=getattr(msg, "valid"),
+        second=getattr(msg, "second"),
+        valid_date=bool(getattr(msg, "validDate")),
+        valid_time=bool(getattr(msg, "validTime")),
+        fully_resolved=bool(getattr(msg, "fullyResolved")),
+        valid_mag=bool(getattr(msg, "validMag")),
         t_acc=getattr(msg, "tAcc"),
         nano=getattr(msg, "nano"),
         fix_type=GnssFixType(getattr(msg, "fixType")),
-        flags=getattr(msg, "flags"),
-        flags2=getattr(msg, "flags2"),
+        gnss_fix_ok=bool(getattr(msg, "gnssFixOk")),
+        dgps_used=bool(getattr(msg, "diffSoln")),
+        power_save_mode=PowerSaveModeState(getattr(msg, "psmState")),
+        carrier_phase_solution=CarrierPhaseSolution(getattr(msg, "carrSoln")),
+        heading_of_vehicle_valid=bool(getattr(msg, "headVehValid")),
+        date_time_confirmation_available=bool(getattr(msg, "confirmedAvai")),
+        confirmed_date=bool(getattr(msg, "confirmedDate")),
+        confirmed_time=bool(getattr(msg, "confirmedTime")),
         num_sv=getattr(msg, "numSV"),
         lon=getattr(msg, "lon"),
         lat=getattr(msg, "lat"),
@@ -108,6 +140,10 @@ def parse_ubx_nav_pvt_message(msg: UBXMessage) -> UbxNavPvt:
         s_acc=getattr(msg, "sAcc"),
         head_acc=getattr(msg, "headAcc"),
         p_dop=getattr(msg, "pDOP"),
+        invalid_lon_lat_height=bool(getattr(msg, "invalidLlh")),
+        last_correction_age=LastCorrectionAge(getattr(msg, "lastCorrectionAge")),
+        authenticated_time=bool(getattr(msg, "authTime")),
+        nma_fix_status=bool(getattr(msg, "nmaFixStatus")),
         head_veh=getattr(msg, "headVeh"),
         mag_dec=getattr(msg, "magDec"),
         mag_acc=getattr(msg, "magAcc"),
