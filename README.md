@@ -1,5 +1,20 @@
 # Mobile wind monitoring system
 
+## Data logging & replay
+
+The client can record raw inputs and computed outputs to allow working on the
+processing logic without needing to collect live data.
+
+- Enable data logging via `LOGGING.DATA_LOG_DIR` (one rotating log file per stream).
+- Streams recorded include `gps` (raw), `position`, `heading`, `wind` (apparent) and `true_wind`.
+
+Replay with a terminal UI:
+
+- `python src/replay.py` (uses paths from `config.ini`)
+- `python src/replay.py data_logs` (directory containing per-stream `*.log*` files)
+
+Controls: `space` play/pause, `n` step (paused), `+/-` change speed, `q` quit.
+
 ## Bill of Materials
 TODO
 
