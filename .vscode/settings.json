@@ -51,7 +51,6 @@
         "oneshot",
         "protfilter",
         "pycache",
-        "pynmea",
         "pyright",
         "pytest",
         "pythonpath",
