@@ -47,15 +47,15 @@ def init_logging() -> None:
 if __name__ == "__main__":
     init_logging()
 
-    position_queue = gps.init()
-    n2k_node, heading_queue, wind_queue = nmea.init()
-
+    position_queue: Queue[PositionData] = Queue()
     position_queue2: Queue[PositionData] = Queue()
+    gps.init([position_queue, position_queue2])
+    n2k_node, heading_queue, wind_queue = nmea.init()
 
     # Forward the GPS data to the NMEA2000 network
     threading.Thread(
         target=nmea.forward_position,
-        args=(n2k_node, position_queue, position_queue2),
+        args=(n2k_node, position_queue),
         daemon=True,
     ).start()
 

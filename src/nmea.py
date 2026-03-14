@@ -95,7 +95,6 @@ class Handler(n2k.MessageHandler):
 def forward_position(
     n2k_node: n2k.Node,
     input_queue: Queue[PositionData],
-    output_queue: Queue[PositionData],
 ) -> None:
     """
     Forward position data from the input to the NMEA2000 network and the output queue.
@@ -108,7 +107,9 @@ def forward_position(
     :param output_queue: Output queue to forward position data.
     """
     while True:
-        position = input_queue.get()
+        position = None
+        while not input_queue.empty() or position is None:
+            position = input_queue.get()
 
         message = n2k.messages.create_n2k_gnss_data_message(
             n2k.messages.GNSSPositionData(
@@ -154,8 +155,6 @@ def forward_position(
             ),
         )
         n2k_node.send_msg(message)
-
-        output_queue.put(position)
 
 
 def forward_wind(

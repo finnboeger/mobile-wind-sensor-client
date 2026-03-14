@@ -216,12 +216,13 @@ def log_position_info(last_position: PositionData, position: PositionData) -> No
 
 def worker(
     message_queue: Queue[pyubx2.UBXMessage],
-    position_queue: Queue[PositionData],
+    output_queues: list[Queue[PositionData]],
 ) -> None:
     """
     Read the GPS position data from the serial console and forward it to the queue.
 
-    :param position_queue: Queue to output GPS position data to.
+    :param message_queue: Queue containing raw UBX messages read from the serial console
+    :param output_queues: List of queues to output GPS position data to.
     """
     # Wait for first GPS fix
     wait_for_gps_fix(message_queue)
@@ -274,7 +275,8 @@ def worker(
 
         log.data("position", position)
         if position.valid:
-            position_queue.put(position)
+            for queue in output_queues:
+                queue.put(position)
 
     while True:
         message = message_queue.get()
@@ -296,13 +298,12 @@ def worker(
             submit_position_data(hnr_pvt_message)
 
 
-def init() -> Queue[PositionData]:
+def init(output_queues: list[Queue[PositionData]]) -> None:
     """
     Initialize the GPS module.
 
-    :return: A queue that will contain GPS position data.
+    :param output_queues: List of queues to output GPS position data to.
     """
-    position_queue: Queue[PositionData] = Queue()
     message_queue: Queue[pyubx2.UBXMessage] = Queue()
 
     threading.Thread(
@@ -315,9 +316,7 @@ def init() -> Queue[PositionData]:
         target=worker,
         args=(
             message_queue,
-            position_queue,
+            output_queues,
         ),
         daemon=True,
     ).start()
-
-    return position_queue
