@@ -77,7 +77,7 @@ class Config:
             section: str,
             option: str,
             parser: Callable[[str], T],
-            fallback: T | None,
+            fallback: T | None = None,
         ) -> T:
             """Get a configuration value with a fallback."""
             try:
@@ -96,6 +96,23 @@ class Config:
                 )
                 return fallback
 
+        def get_optional(
+            config: configparser.ConfigParser,
+            section: str,
+            option: str,
+            parser: Callable[[str], T],
+        ) -> T | None:
+            """Get an optional configuration value, returning None if it's not found."""
+            try:
+                return parser(config.get(section, option))
+            except (configparser.NoSectionError, configparser.NoOptionError):
+                logger.info(
+                    "%s.%s not found in config file. Defaulting to None.",
+                    section,
+                    option,
+                )
+                return None
+
         def parse_log_level(level: str) -> int:
             mapping = logging._nameToLevel  # noqa: SLF001
             if level in mapping:
@@ -109,11 +126,10 @@ class Config:
                 "SENSOR",
                 "COMPASS_OFFSET_DEGREES",
                 float,
-                None,
             ),
         )
         self.LOGGING = LoggingConfig(
-            LOG_FILE=config.get("LOGGING", "LOG_FILE", fallback=None),
+            LOG_FILE=get_optional(config, "LOGGING", "LOG_FILE", str),
             LOG_LEVEL=get(
                 config,
                 "LOGGING",
@@ -123,21 +139,23 @@ class Config:
             ),
             MAX_LOG_SIZE=get(config, "LOGGING", "MAX_LOG_SIZE", int, 5000),
             MAX_LOG_FILES=get(config, "LOGGING", "MAX_LOG_FILES", int, 10),
-            DATA_LOG_DIR=config.get("LOGGING", "DATA_LOG_DIR", fallback=None),
+            DATA_LOG_DIR=get_optional(config, "LOGGING", "DATA_LOG_DIR", str),
             MAX_DATA_LOG_SIZE=get(
                 config,
                 "LOGGING",
                 "MAX_DATA_LOG_SIZE",
                 int,
-                100 * 1000,
+                100_000,
             ),
         )
         self.NETWORK = NetworkConfig(
             INTERFACE_PRIORITY=[
                 interface.strip()
-                for interface in config.get(
+                for interface in get(
+                    config,
                     "NETWORK",
                     "INTERFACE_PRIORITY",
+                    str,
                     fallback="",
                 ).split(",")
                 if interface.strip() != ""
@@ -149,14 +167,14 @@ class Config:
                 bool,
                 fallback=False,
             ),
-            AP_SSID=config.get("NETWORK", "AP_SSID", fallback=None),
-            AP_PASSWORD=config.get("NETWORK", "AP_PASSWORD", fallback=None),
+            AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
+            AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),
         )
         self.MQTT = MQTTConfig(
             BROKER=get(config, "MQTT", "BROKER", str, "broker.hivemq.com"),
             PORT=get(config, "MQTT", "PORT", int, 8883),
-            USERNAME=config.get("MQTT", "USERNAME", fallback=None),
-            PASSWORD=config.get("MQTT", "PASSWORD", fallback=None),
+            USERNAME=get_optional(config, "MQTT", "USERNAME", str),
+            PASSWORD=get_optional(config, "MQTT", "PASSWORD", str),
             QUEUE_SIZE=get(config, "MQTT", "QUEUE_SIZE", int, 5),
         )
         ports: list[GPSPort] = ["I2C", "UART1", "UART2", "USB", "SPI"]
