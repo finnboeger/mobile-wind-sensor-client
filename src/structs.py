@@ -14,18 +14,18 @@ class PositionData:
     #: Fix status
     valid: bool
     #: Latitude in degrees, positive for North, negative for South
-    latitude: float | None = None  # Used when forwarding
+    latitude: float  # Used when forwarding
     #: Longitude in degrees, positive for East, negative for West
-    longitude: float | None = None  # Used when forwarding
+    longitude: float  # Used when forwarding
     #: Altitude in meters above mean sea level (geoid)
-    altitude: float | None = None  # Used when forwarding
+    altitude: float  # Used when forwarding
     #: Difference between WGS-84 ellipsoid and mean sea level (geoid) in meters.
     #: Negative values indicate that the mean-sea-level is below the ellipsoid.
-    geoidal_separation: float | None = None  # Used when forwarding
+    geoidal_separation: float  # Used when forwarding
     #: Speed over ground in knots
-    speed: float | None = None  # Used when forwarding and for calc
-    #: True course over ground in degrees. None if the receiver is not moving
-    true_course: float | None = None  # Used when forwarding and for calc
+    speed: float  # Used when forwarding and for calc
+    #: True course over ground in degrees.
+    true_course: float  # Used when forwarding and for calc
     #: Age of differential GPS data in seconds since last SC104 type 1 or 9 update.
     #: None if Differential GPS is not used.
     differential_gps_data_age: int | None = None  # Used when forwarding

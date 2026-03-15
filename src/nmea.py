@@ -142,15 +142,8 @@ def forward_position(
 
         message = n2k.messages.create_n2k_cog_sog_rapid_message(
             n2k.messages.CogSogRapid(
-                cog=(
-                    n2k.utils.deg_to_rad(position.true_course)
-                    if position.true_course is not None
-                    # Default to 0 if None, as the Display won't show the data otherwise
-                    else 0.0
-                ),
-                sog=n2k.utils.knots_to_meters_per_second(position.speed)
-                if position.speed is not None
-                else 0.0,
+                cog=(n2k.utils.deg_to_rad(position.true_course)),
+                sog=n2k.utils.knots_to_meters_per_second(position.speed),
                 heading_reference=n2k.types.N2kHeadingReference.true,
             ),
         )

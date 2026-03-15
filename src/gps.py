@@ -176,17 +176,6 @@ def log_position_info(last_position: PositionData, position: PositionData) -> No
     elif (
         last_position.valid and position.valid
     ) and logger.getEffectiveLevel() <= logging.DEBUG:
-        if not (
-            last_position.latitude is not None
-            and last_position.longitude is not None
-            and position.latitude is not None
-            and position.longitude is not None
-        ):
-            error_message = (
-                "Current or last position has missing latitude or longitude."
-            )
-            raise TypeError(error_message)
-
         movement_vector = Vector2D(
             x=last_position.latitude - position.latitude,
             y=last_position.longitude - position.longitude,

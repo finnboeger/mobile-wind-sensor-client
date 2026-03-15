@@ -35,9 +35,6 @@ def read_position_queue(
     movement_buffer: list[Vector2D] = []
     while not position_queue.empty():
         position = position_queue.get()
-        if position.true_course is None or position.speed is None:
-            logger.debug("Discarding position data with missing course or speed.")
-            continue
         movement_buffer.append(
             Vector2D.from_polar(
                 PolarCoordinates(
