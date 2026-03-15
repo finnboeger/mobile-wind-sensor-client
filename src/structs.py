@@ -1,4 +1,8 @@
 from dataclasses import dataclass
+from queue import Queue
+
+type PositionQueue = Queue[PositionData]
+type WindOutputQueue = Queue[tuple[CorrectedApparentWindData, TrueWindData]]
 
 
 @dataclass(frozen=False, kw_only=True)

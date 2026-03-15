@@ -7,7 +7,7 @@ import gps
 import nmea
 import wind
 from config import Config
-from structs import CorrectedApparentWindData, PositionData, TrueWindData
+from structs import PositionQueue, WindOutputQueue
 
 
 def init_logging() -> None:
@@ -47,29 +47,32 @@ def init_logging() -> None:
 if __name__ == "__main__":
     init_logging()
 
-    position_queue: Queue[PositionData] = Queue()
-    position_queue2: Queue[PositionData] = Queue()
-    gps.init([position_queue, position_queue2])
+    nmea_position_queue: PositionQueue = Queue()
+    wind_position_queue: PositionQueue = Queue()
+    gps.init([nmea_position_queue, wind_position_queue])
     n2k_node, heading_queue, wind_queue = nmea.init()
 
     # Forward the GPS data to the NMEA2000 network
     threading.Thread(
         target=nmea.forward_position,
-        args=(n2k_node, position_queue),
+        args=(n2k_node, nmea_position_queue),
         daemon=True,
     ).start()
 
     # TODO: init mqtt
     # TODO: potentially init local server
 
-    forward_wind_to_nmea_queue: Queue[
-        tuple[CorrectedApparentWindData, TrueWindData]
-    ] = Queue()
+    forward_wind_to_nmea_queue: WindOutputQueue = Queue()
 
     # Start the worker thread to compute the true wind and send it the the consumers
     worker_thread = threading.Thread(
         target=wind.worker,
-        args=(position_queue2, heading_queue, wind_queue, [forward_wind_to_nmea_queue]),
+        args=(
+            wind_position_queue,
+            heading_queue,
+            wind_queue,
+            [forward_wind_to_nmea_queue],
+        ),
     )
     worker_thread.start()
 

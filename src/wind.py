@@ -14,6 +14,7 @@ from structs import (
     PositionData,
     TrueWindData,
     WindData,
+    WindOutputQueue,
 )
 from utils.vector import PolarCoordinates, Vector2D
 
@@ -91,7 +92,7 @@ def worker(
     position_queue: Queue[PositionData],
     heading_queue: Queue[HeadingData],
     wind_queue: Queue[ApparentWindData],
-    consumers: list[Queue[tuple[CorrectedApparentWindData, TrueWindData]]],
+    consumers: list[WindOutputQueue],
 ) -> None:
     current_movement_vector: Vector2D | None = None
     latest_position_time: int | None = None

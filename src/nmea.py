@@ -7,11 +7,10 @@ import n2k
 import log
 from structs import (
     ApparentWindData,
-    CorrectedApparentWindData,
     HeadingData,
-    PositionData,
-    TrueWindData,
+    PositionQueue,
     WindData,
+    WindOutputQueue,
 )
 
 MAX_WIND_SPEED = 200  # m/s, values above this are considered invalid
@@ -94,7 +93,7 @@ class Handler(n2k.MessageHandler):
 
 def forward_position(
     n2k_node: n2k.Node,
-    input_queue: Queue[PositionData],
+    input_queue: PositionQueue,
 ) -> None:
     """
     Forward position data from the input to the NMEA2000 network and the output queue.
@@ -160,7 +159,7 @@ def forward_position(
 
 def forward_wind(
     n2k_node: n2k.Node,
-    queue: Queue[tuple[CorrectedApparentWindData, TrueWindData]],
+    queue: WindOutputQueue,
 ) -> None:
     """
     Forward wind data from the input to the NMEA2000 network and the output queue.

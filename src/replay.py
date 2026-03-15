@@ -38,6 +38,7 @@ from structs import (
     HeadingData,
     PositionData,
     TrueWindData,
+    WindOutputQueue,
 )
 
 EXPECTED_LINE_PARTS: Final[int] = 2
@@ -258,7 +259,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
     position_queue: Queue[PositionData] = Queue()
     heading_queue: Queue[HeadingData] = Queue()
     wind_queue: Queue[ApparentWindData] = Queue()
-    calc_out_queue: Queue[tuple[CorrectedApparentWindData, TrueWindData]] = Queue()
+    calc_out_queue: WindOutputQueue = Queue()
 
     threading.Thread(
         target=wind.worker,
