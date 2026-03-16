@@ -385,7 +385,8 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
             lon = p.longitude if p.longitude is not None else "-"
             line = f"  {t - events[0].log_time:7.1f}s  "
             line += f"lat={lat:>10}  lon={lon:>11}  "
-            line += f"sog={_fmt_knots(p.speed)}  cog={cog}"
+            speed_kts = n2k.utils.meters_per_second_to_knots(p.speed)
+            line += f"sog={_fmt_knots(speed_kts)}  cog={cog}"
             lines.append(
                 line,
             )

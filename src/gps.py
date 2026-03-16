@@ -9,7 +9,6 @@ from typing import Literal, TypeVar
 import pyubx2
 import pyubx2.ubxtypes_core
 import serial
-from n2k.utils import meters_per_second_to_knots
 
 import config
 import log
@@ -254,7 +253,7 @@ def worker(
             altitude=message.height / 1000,
             geoidal_separation=(message.height - message.height_above_mean_sea_level)
             / 1000,
-            speed=meters_per_second_to_knots(message.ground_speed / 1000),
+            speed=message.ground_speed / 1000,
             true_course=message.heading_of_motion,
             differential_gps_data_age=differential_gps_data_age,
             differential_reference_station_id=differential_reference_station_id,

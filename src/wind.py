@@ -39,9 +39,7 @@ def read_position_queue(
             Vector2D.from_polar(
                 PolarCoordinates(
                     angle=n2k.utils.deg_to_rad(position.true_course),
-                    magnitude=n2k.utils.knots_to_meters_per_second(
-                        position.speed,
-                    ),
+                    magnitude=position.speed,
                 ),
             ),
         )

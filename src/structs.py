@@ -22,7 +22,7 @@ class PositionData:
     #: Difference between WGS-84 ellipsoid and mean sea level (geoid) in meters.
     #: Negative values indicate that the mean-sea-level is below the ellipsoid.
     geoidal_separation: float  # Used when forwarding
-    #: Speed over ground in knots
+    #: Speed over ground in m/s
     speed: float  # Used when forwarding and for calc
     #: True course over ground in degrees.
     true_course: float  # Used when forwarding and for calc
