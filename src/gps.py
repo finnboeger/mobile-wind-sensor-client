@@ -235,7 +235,7 @@ def worker(
                         hour=message.hour,
                         minute=message.minute,
                         second=message.second,
-                        tzinfo=datetime.UTC,
+                        tzinfo=datetime.timezone.utc,  # noqa: UP017
                     ).timestamp()
                     * 1000,
                 )
