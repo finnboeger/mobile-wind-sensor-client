@@ -36,6 +36,8 @@ class MQTTConfig:
     PORT: int
     USERNAME: str | None
     PASSWORD: str | None
+    CLIENT_ID: str
+    TOPIC: str
     QUEUE_SIZE: int
 
 
@@ -56,7 +58,7 @@ class Config:
     SENSOR: SensorConfig
     LOGGING: LoggingConfig
     NETWORK: NetworkConfig
-    MQTT: MQTTConfig
+    MQTT: MQTTConfig | None
     GPS: GPSConfig
 
     def __new__(cls) -> "Config":
@@ -140,13 +142,7 @@ class Config:
             MAX_LOG_SIZE=get(config, "LOGGING", "MAX_LOG_SIZE", int, 5000),
             MAX_LOG_FILES=get(config, "LOGGING", "MAX_LOG_FILES", int, 10),
             DATA_LOG_DIR=get_optional(config, "LOGGING", "DATA_LOG_DIR", str),
-            MAX_DATA_LOG_SIZE=get(
-                config,
-                "LOGGING",
-                "MAX_DATA_LOG_SIZE",
-                int,
-                100_000,
-            ),
+            MAX_DATA_LOG_SIZE=get(config, "LOGGING", "MAX_DATA_LOG_SIZE", int, 100_000),
         )
         self.NETWORK = NetworkConfig(
             INTERFACE_PRIORITY=[
@@ -170,12 +166,19 @@ class Config:
             AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
             AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),
         )
-        self.MQTT = MQTTConfig(
-            BROKER=get(config, "MQTT", "BROKER", str, "broker.hivemq.com"),
-            PORT=get(config, "MQTT", "PORT", int, 8883),
-            USERNAME=get_optional(config, "MQTT", "USERNAME", str),
-            PASSWORD=get_optional(config, "MQTT", "PASSWORD", str),
-            QUEUE_SIZE=get(config, "MQTT", "QUEUE_SIZE", int, 5),
+        broker = get_optional(config, "MQTT", "BROKER", str)
+        self.MQTT = (
+            MQTTConfig(
+                BROKER=broker,
+                PORT=get(config, "MQTT", "PORT", int, 8883),
+                USERNAME=get_optional(config, "MQTT", "USERNAME", str),
+                PASSWORD=get_optional(config, "MQTT", "PASSWORD", str),
+                CLIENT_ID=get(config, "MQTT", "CLIENT_ID", str),
+                TOPIC=get(config, "MQTT", "TOPIC", str),
+                QUEUE_SIZE=get(config, "MQTT", "QUEUE_SIZE", int, 5),
+            )
+            if broker is not None
+            else None
         )
         ports: list[GPSPort] = ["I2C", "UART1", "UART2", "USB", "SPI"]
         self.GPS = GPSConfig(
