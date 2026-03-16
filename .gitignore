@@ -13,3 +13,4 @@ dist
 *.log.*
 !*.log.*[^0-9]*
 config.ini
+workbench
