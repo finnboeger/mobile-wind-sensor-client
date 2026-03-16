@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from queue import Queue
-
-type PositionQueue = Queue[PositionData]
-type WindOutputQueue = Queue[tuple[CorrectedApparentWindData, TrueWindData]]
+from typing import TypeAlias
 
 
 @dataclass(frozen=False, kw_only=True)
@@ -74,3 +72,7 @@ class CorrectedApparentWindData(WindData):
 
 class TrueWindData(WindData):
     """True wind with wind speed and direction."""
+
+
+PositionQueue: TypeAlias = Queue[PositionData]
+WindOutputQueue: TypeAlias = Queue[tuple[CorrectedApparentWindData, TrueWindData]]
