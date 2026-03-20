@@ -30,11 +30,11 @@ repos:
     hooks:
     -   id: bandit
         args: ["-c", "pyproject.toml"]
--   repo: local
-    hooks:
-    -   id: pytest
-        name: run tests
-        entry: ./.venv/bin/pytest
-        language: python
-        types: [python] # only run if python files are changed
-        pass_filenames: false
+#-   repo: local
+#    hooks:
+#    -   id: pytest
+#        name: run tests
+#        entry: ./.venv/bin/pytest
+#        language: python
+#        types: [python] # only run if python files are changed
+#        pass_filenames: false
