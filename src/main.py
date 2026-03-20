@@ -8,6 +8,7 @@ import mqtt
 import nmea
 import wind
 from config import Config
+from log import DATA_SEPARATOR
 from structs import PositionQueue, WindOutputQueue
 
 
@@ -17,7 +18,13 @@ def init_logging() -> None:
     logger = logging.getLogger(__name__)
 
     formatter = logging.Formatter(
-        "%(asctime)s,%(msecs).03d :: %(levelname)s :: %(name)s ::  %(message)s",
+        "%(asctime)s,%(msecs).03d"
+        + DATA_SEPARATOR
+        + "%(levelname)s"
+        + DATA_SEPARATOR
+        + "%(name)s"
+        + DATA_SEPARATOR
+        + "%(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     startup_handler = logging.StreamHandler()

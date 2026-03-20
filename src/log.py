@@ -19,7 +19,7 @@ DataConsumer = Literal[
     "true_wind",
 ]
 
-_DATA_FORMATTER = logging.Formatter("%(created).3f :: %(message)s")
+_DATA_FORMATTER = logging.Formatter("%(created).3f" + DATA_SEPARATOR + "%(message)s")
 _data_loggers: dict[str, logging.Logger] = {}
 
 
