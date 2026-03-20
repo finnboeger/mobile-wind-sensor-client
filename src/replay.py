@@ -17,6 +17,7 @@ import argparse
 import curses
 import logging
 import math
+import textwrap
 import threading
 import time
 from collections import deque
@@ -48,6 +49,8 @@ MIN_TITLE_WIDTH: Final[int] = 6
 UI_REFRESH_MS: Final[int] = 50
 MAX_SPEED: Final[float] = 64.0
 MIN_SPEED: Final[float] = 0.1
+VISIBLE_MESSAGES: Final[int] = 10
+GPS_MAX_LINES_PER_MESSAGE: Final[int] = 4
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -239,6 +242,28 @@ def _draw_lines(stdscr: curses.window, rect: Rect, lines: list[str]) -> None:
         stdscr.addnstr(rect.y + i, rect.x, lines[i], rect.w)
 
 
+def _wrap_with_prefix(prefix: str, text: str, *, width: int) -> list[str]:
+    if width <= 0:
+        return []
+
+    if len(prefix) >= width:
+        return [prefix[:width]]
+
+    available = max(1, width - len(prefix))
+    wrapped = textwrap.wrap(
+        text,
+        width=available,
+        break_long_words=True,
+        break_on_hyphens=False,
+        drop_whitespace=False,
+    )
+    if not wrapped:
+        return [prefix]
+
+    continuation = " " * len(prefix)
+    return [prefix + wrapped[0], *[continuation + part for part in wrapped[1:]]]
+
+
 def run_tui(  # noqa: C901, PLR0912, PLR0915
     stdscr: curses.window,
     *,
@@ -260,6 +285,8 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
     heading_queue: Queue[HeadingData] = Queue()
     wind_queue: Queue[ApparentWindData] = Queue()
     calc_out_queue: WindOutputQueue = Queue()
+    # TODO: add mqtt to output queue as an option (via cli flag?).
+    # Same for LoraWAN etc. later
 
     threading.Thread(
         target=wind.worker,
@@ -270,7 +297,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
     input_positions: deque[tuple[float, PositionData]] = deque(maxlen=tail)
     input_headings: deque[tuple[float, HeadingData]] = deque(maxlen=tail)
     input_winds: deque[tuple[float, ApparentWindData]] = deque(maxlen=tail)
-    input_gps_raw: deque[tuple[float, bytes]] = deque(maxlen=tail)
+    input_gps: deque[tuple[float, UBXMessage]] = deque(maxlen=tail)
 
     logged_true_wind: deque[tuple[float, TrueWindData]] = deque(maxlen=tail)
     logged_corr_app: deque[tuple[float, CorrectedApparentWindData]] = deque(maxlen=tail)
@@ -294,14 +321,15 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
         if evt.consumer == "position" and isinstance(evt.payload, PositionData):
             input_positions.append((evt.log_time, evt.payload))
             position_queue.put(evt.payload)
+            # TODO: also add to mqtt queue if enabled
         elif evt.consumer == "heading" and isinstance(evt.payload, HeadingData):
             input_headings.append((evt.log_time, evt.payload))
             heading_queue.put(evt.payload)
         elif evt.consumer == "wind" and isinstance(evt.payload, ApparentWindData):
             input_winds.append((evt.log_time, evt.payload))
             wind_queue.put(evt.payload)
-        elif evt.consumer == "gps" and isinstance(evt.payload, (bytes, bytearray)):
-            input_gps_raw.append((evt.log_time, bytes(evt.payload)))
+        elif evt.consumer == "gps" and isinstance(evt.payload, UBXMessage):
+            input_gps.append((evt.log_time, evt.payload))
         elif evt.consumer == "true_wind" and isinstance(evt.payload, TrueWindData):
             logged_true_wind.append((evt.log_time, evt.payload))
         elif evt.consumer == "apparent_wind_corrected" and isinstance(
@@ -360,26 +388,21 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
 
         # Layout
         top = 1
-        body_h = max(0, max_y - 2)
-        col_w = max_x // 2
+        bottom_box_h = 11
+        top_box_h = max(0, max_y - 2 - bottom_box_h)
+        body_w = max(0, max_x - 2)
         left_x = 0
-        right_x = col_w
-        left_w = col_w
-        right_w = max_x - col_w
 
-        left_box_h = body_h
-        right_box_h = body_h
+        top_rect = Rect(y=top, x=left_x, h=top_box_h, w=body_w)
+        bottom_rect = Rect(y=top + top_box_h, x=left_x, h=bottom_box_h, w=body_w)
 
-        left_rect = Rect(y=top, x=left_x, h=left_box_h, w=left_w)
-        right_rect = Rect(y=top, x=right_x, h=right_box_h, w=right_w)
-
-        _draw_box(stdscr, left_rect, "Recent Inputs")
-        _draw_box(stdscr, right_rect, "Outputs (logged vs recalculated)")
+        _draw_box(stdscr, top_rect, "Recent Inputs")
+        _draw_box(stdscr, bottom_rect, "Outputs (logged vs recalculated)")
 
         # Inputs
         lines: list[str] = []
         lines.append("Position (last)")
-        for t, p in list(input_positions)[-min(tail, 4) :][::-1]:
+        for t, p in list(input_positions)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
             cog = p.true_course if p.true_course is not None else "-"
             lat = p.latitude if p.latitude is not None else "-"
             lon = p.longitude if p.longitude is not None else "-"
@@ -387,35 +410,39 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
             line += f"lat={lat:>10}  lon={lon:>11}  "
             speed_kts = n2k.utils.meters_per_second_to_knots(p.speed)
             line += f"sog={_fmt_knots(speed_kts)}  cog={cog}"
-            lines.append(
-                line,
-            )
+            lines.append(line)
 
         lines.append("")
         lines.append("Heading (last)")
-        for t, h in list(input_headings)[-min(tail, 4) :][::-1]:
+        for t, h in list(input_headings)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
             lines.append(
                 f"  {t - events[0].log_time:7.1f}s  hdg={_fmt_angle(h.heading)}",
             )
 
         lines.append("")
         lines.append("Apparent wind (last)")
-        for t, w_evt in list(input_winds)[-min(tail, 4) :][::-1]:
+        for t, w_evt in list(input_winds)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
             aws_mps = _fmt_mps(w_evt.wind_speed)
             aws_kt = _fmt_knots_from_mps(w_evt.wind_speed)
             line = f"  {t - events[0].log_time:7.1f}s  "
             line += f"aws={aws_mps} ({aws_kt})  "
             line += f"awa={_fmt_angle(w_evt.wind_angle)}"
-            lines.append(
-                line,
-            )
+            lines.append(line)
 
         lines.append("")
-        lines.append(f"Raw GPS messages buffered: {len(input_gps_raw)}")
+        lines.append(f"Raw GPS messages buffered: {len(input_gps)}")
+        gps_rect_w = max(0, body_w - 2)
+        for t, gps_msg in list(input_gps)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
+            prefix = f"  {t - events[0].log_time:7.1f}s  "
+            wrapped_lines = _wrap_with_prefix(prefix, str(gps_msg), width=gps_rect_w)
+            if GPS_MAX_LINES_PER_MESSAGE == 0:
+                lines.extend(wrapped_lines)
+            else:
+                lines.extend(wrapped_lines[:GPS_MAX_LINES_PER_MESSAGE])
 
         _draw_lines(
             stdscr,
-            Rect(y=top + 1, x=left_x + 1, h=left_box_h - 2, w=left_w - 2),
+            Rect(y=top + 1, x=left_x + 1, h=top_box_h - 2, w=body_w - 2),
             lines,
         )
 
@@ -471,7 +498,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
 
         _draw_lines(
             stdscr,
-            Rect(y=top + 1, x=right_x + 1, h=right_box_h - 2, w=right_w - 2),
+            Rect(y=top + top_box_h + 1, x=left_x + 1, h=bottom_box_h - 2, w=body_w - 2),
             out_lines,
         )
 
