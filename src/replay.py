@@ -49,7 +49,6 @@ MIN_TITLE_WIDTH: Final[int] = 6
 UI_REFRESH_MS: Final[int] = 50
 MAX_SPEED: Final[float] = 64.0
 MIN_SPEED: Final[float] = 0.1
-VISIBLE_MESSAGES: Final[int] = 10
 GPS_MAX_LINES_PER_MESSAGE: Final[int] = 4
 
 
@@ -401,7 +400,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
         # Inputs
         lines: list[str] = []
         lines.append("Position (last)")
-        for t, p in list(input_positions)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
+        for t, p in list(input_positions)[-tail:][::-1]:
             cog = p.true_course if p.true_course is not None else "-"
             lat = p.latitude if p.latitude is not None else "-"
             lon = p.longitude if p.longitude is not None else "-"
@@ -413,14 +412,14 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
 
         lines.append("")
         lines.append("Heading (last)")
-        for t, h in list(input_headings)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
+        for t, h in list(input_headings)[-tail:][::-1]:
             lines.append(
                 f"  {t - events[0].log_time:7.1f}s  hdg={_fmt_angle(h.heading)}",
             )
 
         lines.append("")
         lines.append("Apparent wind (last)")
-        for t, w_evt in list(input_winds)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
+        for t, w_evt in list(input_winds)[-tail:][::-1]:
             aws_mps = _fmt_mps(w_evt.wind_speed)
             aws_kt = _fmt_knots_from_mps(w_evt.wind_speed)
             line = f"  {t - events[0].log_time:7.1f}s  "
@@ -431,7 +430,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
         lines.append("")
         lines.append(f"Raw GPS messages buffered: {len(input_gps)}")
         gps_rect_w = max(0, body_w - 2)
-        for t, gps_msg in list(input_gps)[-min(tail, VISIBLE_MESSAGES) :][::-1]:
+        for t, gps_msg in list(input_gps)[-tail:][::-1]:
             prefix = f"  {t - events[0].log_time:7.1f}s  "
             wrapped_lines = _wrap_with_prefix(prefix, str(gps_msg), width=gps_rect_w)
             if GPS_MAX_LINES_PER_MESSAGE == 0:
