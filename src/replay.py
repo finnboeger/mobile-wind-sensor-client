@@ -29,6 +29,7 @@ import jsonpickle
 import n2k
 from pyubx2 import UBXMessage
 
+import mqtt
 import wind
 from config import Config
 from log import DATA_SEPARATOR
@@ -263,13 +264,14 @@ def _wrap_with_prefix(prefix: str, text: str, *, width: int) -> list[str]:
     return [prefix + wrapped[0], *[continuation + part for part in wrapped[1:]]]
 
 
-def run_tui(  # noqa: C901, PLR0912, PLR0915
+def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
     stdscr: curses.window,
     *,
     events: list[ReplayEvent],
     speed: float,
     tail: int,
     start_paused: bool,
+    features: list[str],
 ) -> None:
     init_logging()
 
@@ -282,13 +284,19 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
     position_queue: Queue[PositionData] = Queue()
     heading_queue: Queue[HeadingData] = Queue()
     wind_queue: Queue[ApparentWindData] = Queue()
+    output_queues: list[WindOutputQueue] = []
     calc_out_queue: WindOutputQueue = Queue()
-    # TODO: add mqtt to output queue as an option (via cli flag?).
-    # Same for LoraWAN etc. later
+    output_queues.append(calc_out_queue)
+    mqtt_wind_queue: WindOutputQueue = Queue()
+    mqtt_position_queue: Queue[PositionData] = Queue()
+
+    if "mqtt" in features:
+        output_queues.append(mqtt_wind_queue)
+        mqtt.init(mqtt_position_queue, mqtt_wind_queue)
 
     threading.Thread(
         target=wind.worker,
-        args=(position_queue, heading_queue, wind_queue, [calc_out_queue]),
+        args=(position_queue, heading_queue, wind_queue, output_queues),
         daemon=True,
     ).start()
 
@@ -319,7 +327,8 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
         if evt.consumer == "position" and isinstance(evt.payload, PositionData):
             input_positions.append((evt.log_time, evt.payload))
             position_queue.put(evt.payload)
-            # TODO: also add to mqtt queue if enabled
+            if "mqtt" in features:
+                mqtt_position_queue.put(evt.payload)
         elif evt.consumer == "heading" and isinstance(evt.payload, HeadingData):
             input_headings.append((evt.log_time, evt.payload))
             heading_queue.put(evt.payload)
@@ -536,6 +545,15 @@ def main() -> None:
         action="store_true",
         help="Start paused.",
     )
+    parser.add_argument(
+        "--features",
+        type=str,
+        default="",
+        help=(
+            "Comma-separated list of features to enable. Currently supported: mqtt. "
+            "Default is none (all optional features disabled)."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -557,6 +575,7 @@ def main() -> None:
         speed=float(args.speed),
         tail=int(args.tail),
         start_paused=bool(args.paused),
+        features=[x.strip() for x in args.features.split(",")],
     )
 
 
