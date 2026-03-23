@@ -4,9 +4,13 @@ import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from ssl import PROTOCOL_TLS
+from time import sleep
+from typing import Any, Final
 
 import n2k
 import paho.mqtt.client as mqtt
+import paho.mqtt.properties as mqtt_properties
+import paho.mqtt.reasoncodes as mqtt_reasoncodes
 
 from config import Config
 from structs import (
@@ -20,6 +24,8 @@ from structs import (
 from utils.vector import PolarCoordinates, Vector2D
 
 logger = logging.getLogger(__name__)
+
+MAX_INITIAL_CONNECTION_ATTEMPTS: Final = 5
 
 
 def _avg(values: Iterable[float]) -> float:
@@ -80,6 +86,64 @@ def _avg_wind(
     )
 
 
+connection_status = {
+    "state": None,
+    "error_count": 0,
+}
+
+
+def connect_callback(
+    _client: mqtt.Client | None,
+    _userdata: Any,  # noqa: ANN401
+    _connect_flags: dict,
+    reason_code: mqtt_reasoncodes.ReasonCode,
+    _properties: mqtt_properties.Properties,
+) -> None:
+    global connection_status  # noqa: PLW0602
+
+    if not reason_code.is_failure:
+        connection_status["state"] = "success"
+        logger.debug("Connected to MQTT broker")
+        return
+
+    connection_status["state"] = "fail"
+    connection_status["error_count"] += 1
+    logger.error(
+        "Failed to connect to MQTT broker with error: %s (Attempt number: %d)",
+        reason_code.getName(),
+        connection_status["error_count"],
+    )
+
+
+def connect_fail_callback(_client: mqtt.Client, _userdata: Any) -> None:  # noqa: ANN401
+    global connection_status  # noqa: PLW0602
+    logger.error("Failed to connect to MQTT broker due to network error")
+    connection_status["state"] = "fail"
+    connection_status["error_count"] += 1
+
+
+def wait_for_connection(client: mqtt.Client) -> bool:
+    global connection_status  # noqa: PLW0602
+
+    while connection_status["state"] is None:
+        sleep(0.1)
+
+    while (
+        connection_status["state"] == "fail"
+        and connection_status["error_count"] < MAX_INITIAL_CONNECTION_ATTEMPTS
+    ):
+        sleep(0.1)
+    if connection_status["state"] == "fail":
+        logger.error(
+            "Failed to connect to MQTT broker after %d attempts.",
+            connection_status["error_count"],
+        )
+        client.loop_stop()
+        return False
+
+    return True
+
+
 def publish_message(
     client: mqtt.Client,
     topic: str,
@@ -127,6 +191,12 @@ def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
     if config.MQTT is None:
         logger.warning("Attempted to start MQTT worker without a configured broker")
         return
+
+    logger.debug(
+        "Attempting to connect to MQTT broker at %s:%d",
+        config.MQTT.BROKER,
+        config.MQTT.PORT,
+    )
     client = mqtt.Client(
         client_id=config.MQTT.CLIENT_ID,
         userdata=None,
@@ -134,8 +204,13 @@ def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
     )
     client.tls_set(tls_version=PROTOCOL_TLS)
     client.username_pw_set(username=config.MQTT.USERNAME, password=config.MQTT.PASSWORD)
+    client.on_connect = connect_callback  # pyright: ignore[reportAttributeAccessIssue]
+    client.on_connect_fail = connect_fail_callback
     client.connect(config.MQTT.BROKER, config.MQTT.PORT)
     client.loop_start()
+
+    if not wait_for_connection(client):
+        return
 
     # Wait for both queues to produce at least one message.
     wind_buffer: list[tuple[CorrectedApparentWindData, TrueWindData]] = [
