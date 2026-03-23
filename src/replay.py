@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import curses
-import logging
 import math
 import textwrap
 import threading
@@ -33,6 +32,7 @@ from pyubx2 import UBXMessage
 import wind
 from config import Config
 from log import DATA_SEPARATOR
+from main import init_logging
 from structs import (
     ApparentWindData,
     CorrectedApparentWindData,
@@ -272,8 +272,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0915
     tail: int,
     start_paused: bool,
 ) -> None:
-    # Reduce logging noise during curses operation.
-    logging.getLogger().setLevel(logging.CRITICAL)
+    init_logging()
 
     curses.start_color()
     curses.use_default_colors()
