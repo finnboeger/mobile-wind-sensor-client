@@ -183,5 +183,6 @@ def init(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
             position_queue,
             wind_queue,
         ),
+        daemon=True,
     )
     worker_thread.start()
