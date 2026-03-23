@@ -2,8 +2,8 @@ import json
 import logging
 import threading
 from collections.abc import Iterable
+from dataclasses import dataclass
 from ssl import PROTOCOL_TLS
-from typing import Any
 
 import n2k
 import paho.mqtt.client as mqtt
@@ -38,7 +38,15 @@ def _avg_polar_coordinates(coords: Iterable[PolarCoordinates]) -> PolarCoordinat
     return avg_vector.to_polar()
 
 
-def _aggregate_position(samples: list[PositionData]) -> dict[str, Any]:
+@dataclass(frozen=True)
+class ShortPositionData:
+    latitude: float
+    longitude: float
+    speed: float
+    true_course: float
+
+
+def _aggregate_position(samples: list[PositionData]) -> ShortPositionData:
     lat = _avg(p.latitude for p in samples)
     lon = _avg(p.longitude for p in samples)
 
@@ -52,12 +60,12 @@ def _aggregate_position(samples: list[PositionData]) -> dict[str, Any]:
     heading = n2k.utils.rad_to_deg(avg_coordinate.angle)
     speed = avg_coordinate.magnitude
 
-    return {
-        "lat": round(lat, 6),
-        "lon": round(lon, 6),
-        "heading": round(heading),
-        "speed": round(speed, 1),
-    }
+    return ShortPositionData(
+        latitude=lat,
+        longitude=lon,
+        speed=speed,
+        true_course=heading,
+    )
 
 
 def _avg_wind(
@@ -70,6 +78,47 @@ def _avg_wind(
         )
         for p in samples
     )
+
+
+def publish_message(
+    client: mqtt.Client,
+    topic: str,
+    data: tuple[int, ShortPositionData, PolarCoordinates, PolarCoordinates],
+) -> None:
+    timestamp_s, avg_position, avg_true_wind, avg_apparent_wind = data
+    payload = {
+        "timestamp": timestamp_s,
+        "gps": {
+            "lat": round(avg_position.latitude, 6),
+            "lon": round(avg_position.longitude, 6),
+            "heading": round(avg_position.true_course),
+            "speed": round(avg_position.speed, 1),
+        },
+        "true": {
+            "direction": round(n2k.utils.rad_to_deg(avg_true_wind.angle)),
+            "speed": round(avg_true_wind.magnitude, 1),
+        },
+        "apparent": {
+            "direction": round(n2k.utils.rad_to_deg(avg_apparent_wind.angle)),
+            "speed": round(avg_apparent_wind.magnitude, 1),
+        },
+    }
+
+    message_info = client.publish(topic, json.dumps(payload), qos=0)
+    if message_info.rc != mqtt.MQTT_ERR_SUCCESS:
+        logger.error(
+            "Failed to publish MQTT message for timestamp %d "
+            "to topic %s with error code %d",
+            timestamp_s,
+            topic,
+            message_info.rc,
+        )
+    else:
+        logger.debug(
+            "Published MQTT message for timestamp %d to topic %s",
+            timestamp_s,
+            topic,
+        )
 
 
 def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
@@ -156,24 +205,15 @@ def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
         avg_apparent_wind = _avg_wind(current_values["apparent"])
         avg_position = _aggregate_position(current_values["position"])
 
-        payload = {
-            "timestamp": timestamp_s,
-            "gps": avg_position,
-            "true": {
-                "direction": round(n2k.utils.rad_to_deg(avg_true_wind.angle)),
-                "speed": round(avg_true_wind.magnitude, 1),
-            },
-            "apparent": {
-                "direction": round(n2k.utils.rad_to_deg(avg_apparent_wind.angle)),
-                "speed": round(avg_apparent_wind.magnitude, 1),
-            },
-        }
+        publish_message(
+            client,
+            config.MQTT.TOPIC,
+            (timestamp_s, avg_position, avg_true_wind, avg_apparent_wind),
+        )
 
         # we know that both buffers contain at least one message,
         # as we kept waiting for new messages until then
         timestamp_s = max(sec_wind(wind_buffer[0]), sec_position(position_buffer[0]))
-
-        client.publish(config.MQTT.TOPIC, json.dumps(payload), qos=0)
 
 
 def init(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
