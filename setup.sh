@@ -14,7 +14,6 @@ Options:
 	-k, --ssh-pubkey PATH     Path to public SSH key file
 	-s, --ssid NAME           WiFi SSID
 	-p, --password VALUE      WiFi password
-	-d, --id VALUE            WiFi network id_sts value
 	-y, --yes                 Skip interactive confirmations
   -h, --help                Show this help
 EOF
@@ -85,7 +84,6 @@ HOSTNAME="${HOSTNAME:-}"
 SSHPUBKEY="${SSHPUBKEY:-}"
 SSID="${SSID:-}"
 PASSWORD="${PASSWORD:-}"
-ID="${ID:-}"
 ASSUME_YES="false"
 AUTO_SDCARD="false"
 MOUNTED_ROOT="false"
@@ -121,10 +119,6 @@ while [[ $# -gt 0 ]]; do
 			;;
 		-p|--password)
 			PASSWORD="$2"
-			shift 2
-			;;
-		-d|--id)
-			ID="$2"
 			shift 2
 			;;
 		-y|--yes)
@@ -167,7 +161,6 @@ prompt_if_empty HOSTNAME "Hostname"
 prompt_if_empty SSHPUBKEY "Path to public SSH key"
 prompt_if_empty SSID "WiFi SSID"
 prompt_if_empty PASSWORD "WiFi password" true
-prompt_if_empty ID "WiFi id_sts"
 
 if [[ -z "$SDCARD" ]]; then
 	SDCARD="$(mktemp -d /tmp/windbot-sdcard.XXXXXX)"
@@ -273,9 +266,32 @@ ExecStart=ip link set up can0 type can bitrate 250000
 WantedBy=multi-user.target
 EOF
 
-# Add wifi network for automatic connection
-# TODO: check if this still works and probably rewrite to use networkmanager (/etc/NetworkManager/system-connections/)
-printf '\n\nnetwork={\n\tssid="%s"\n\tpsk="%s"\n\tid_sts="%s"\n}' "$SSID" "$PASSWORD" "$ID" >> "$SDCARD/etc/wpa_supplicant/wpa_supplicant.conf"
+# Add WiFi connection for automatic connection via NetworkManager.
+NM_CONNECTION_ID="$SSID"
+NM_CONNECTION_FILE="${SSID//\//_}.nmconnection"
+mkdir -p "$SDCARD/etc/NetworkManager/system-connections"
+cat <<EOF > "$SDCARD/etc/NetworkManager/system-connections/${NM_CONNECTION_FILE}"
+[connection]
+id=$NM_CONNECTION_ID
+type=wifi
+interface-name=wlan0
+
+[wifi]
+mode=infrastructure
+ssid=$SSID
+
+[wifi-security]
+auth-alg=open
+key-mgmt=wpa-psk
+psk=$PASSWORD
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+EOF
+chmod 600 "$SDCARD/etc/NetworkManager/system-connections/${NM_CONNECTION_FILE}"
 
 set +x
 
