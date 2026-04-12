@@ -181,9 +181,6 @@ fi
 echo "About to run: dd if='$INPUT_FILE' of='$OUTPUT_DEVICE' bs=4M status=progress"
 confirm_or_exit "Proceed with flashing '$OUTPUT_DEVICE'?"
 
-# Print each command during flashing and SD card configuration.
-set -x
-
 # Flash SD Card with Raspberry Pi OS Lite
 dd if="$INPUT_FILE" of="$OUTPUT_DEVICE" bs=4M status=progress
 
@@ -216,6 +213,9 @@ if ! mountpoint -q "$SDCARD/boot/firmware"; then
 	mount "$BOOT_PARTITION" "$SDCARD/boot/firmware"
 	MOUNTED_BOOT="true"
 fi
+
+# Print each command during SD card configuration.
+set -x
 
 # Enable ssh on first boot
 touch "$SDCARD/boot/ssh"
