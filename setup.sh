@@ -330,11 +330,6 @@ EOF
 # Add WiFi connection for automatic connection via NetworkManager.
 NM_CONNECTION_ID="$SSID"
 NM_CONNECTION_FILE="${SSID//\//_}.nmconnection"
-mkdir -p "$SDCARD/etc/NetworkManager/conf.d"
-cat <<EOF > "$SDCARD/etc/NetworkManager/conf.d/30-wifi-country.conf"
-[device]
-wifi.country=$WIFI_COUNTRY
-EOF
 mkdir -p "$SDCARD/etc/NetworkManager/system-connections"
 cat <<EOF > "$SDCARD/etc/NetworkManager/system-connections/${NM_CONNECTION_FILE}"
 [connection]
@@ -359,12 +354,8 @@ method=auto
 EOF
 chmod 600 "$SDCARD/etc/NetworkManager/system-connections/${NM_CONNECTION_FILE}"
 
-# Keep country in wpa_supplicant as well for compatibility.
-mkdir -p "$SDCARD/etc/wpa_supplicant"
-if [[ -f "$SDCARD/etc/wpa_supplicant/wpa_supplicant.conf" ]]; then
-	sed -i '/^country=/d' "$SDCARD/etc/wpa_supplicant/wpa_supplicant.conf"
-fi
-printf "country=%s\n" "$WIFI_COUNTRY" >> "$SDCARD/etc/wpa_supplicant/wpa_supplicant.conf"
+# Set country in wpa_supplicant.conf to be picked up by init script
+printf "country=%s\n" "$WIFI_COUNTRY" >> "$SDCARD/boot/firmware/wpa_supplicant.conf"
 
 set +x
 
