@@ -202,7 +202,7 @@ prompt_if_empty HOSTNAME "Hostname"
 prompt_if_empty SSHPUBKEY "Path to public SSH key"
 prompt_if_empty SSID "WiFi SSID"
 prompt_if_empty WIFI_PASSWORD "WiFi password" true
-prompt_if_empty USER_PASSWORD "System user password" true
+prompt_if_empty USER_PASSWORD "Password for the system user (pi)" true
 
 if [[ -z "$SDCARD" ]]; then
 	SDCARD="$(mktemp -d /tmp/windbot-sdcard.XXXXXX)"
