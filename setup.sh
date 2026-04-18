@@ -12,8 +12,11 @@ Options:
 	-m, --sdcard PATH         Mounted SD card root path (optional)
 	-n, --hostname NAME       Hostname to write
 	-k, --ssh-pubkey PATH     Path to public SSH key file
+	-l, --keyboard-layout VAL Keyboard layout (default: de-latin1)
+	-c, --wifi-country CODE   WiFi country code (default: DE)
 	-s, --ssid NAME           WiFi SSID
 	-p, --password VALUE      WiFi password
+	-P, --user-password VALUE System user password (username: pi)
 	-y, --yes                 Skip interactive confirmations
   -h, --help                Show this help
 EOF
@@ -105,8 +108,11 @@ OUTPUT_DEVICE="${OUTPUT_DEVICE:-}"
 SDCARD="${SDCARD:-}"
 HOSTNAME="${HOSTNAME:-}"
 SSHPUBKEY="${SSHPUBKEY:-}"
+KEYBOARD_LAYOUT="${KEYBOARD_LAYOUT:-de-latin1}"
+WIFI_COUNTRY="${WIFI_COUNTRY:-DE}"
 SSID="${SSID:-}"
-PASSWORD="${PASSWORD:-}"
+WIFI_PASSWORD="${WIFI_PASSWORD:-}"
+USER_PASSWORD="${USER_PASSWORD:-}"
 ASSUME_YES="false"
 AUTO_SDCARD="false"
 MOUNTED_ROOT="false"
@@ -136,12 +142,24 @@ while [[ $# -gt 0 ]]; do
 			SSHPUBKEY="$2"
 			shift 2
 			;;
+		-l|--keyboard-layout|--keyboard_layout)
+			KEYBOARD_LAYOUT="$2"
+			shift 2
+			;;
+		-c|--wifi-country|--wifi_country)
+			WIFI_COUNTRY="$2"
+			shift 2
+			;;
 		-s|--ssid)
 			SSID="$2"
 			shift 2
 			;;
 		-p|--password)
-			PASSWORD="$2"
+			WIFI_PASSWORD="$2"
+			shift 2
+			;;
+		-P|--user-password|--user_password)
+			USER_PASSWORD="$2"
 			shift 2
 			;;
 		-y|--yes)
@@ -183,7 +201,8 @@ confirm_or_exit "Use output device '$OUTPUT_DEVICE'?"
 prompt_if_empty HOSTNAME "Hostname"
 prompt_if_empty SSHPUBKEY "Path to public SSH key"
 prompt_if_empty SSID "WiFi SSID"
-prompt_if_empty PASSWORD "WiFi password" true
+prompt_if_empty WIFI_PASSWORD "WiFi password" true
+prompt_if_empty USER_PASSWORD "System user password" true
 
 if [[ -z "$SDCARD" ]]; then
 	SDCARD="$(mktemp -d /tmp/windbot-sdcard.XXXXXX)"
@@ -198,6 +217,11 @@ fi
 
 if [[ ! -f "$SSHPUBKEY" ]]; then
 	echo "Public SSH key does not exist: $SSHPUBKEY" >&2
+	exit 1
+fi
+
+if ! command -v openssl >/dev/null 2>&1; then
+	echo "openssl is required but was not found in PATH." >&2
 	exit 1
 fi
 
@@ -247,6 +271,10 @@ touch "$SDCARD/boot/ssh"
 # Set the hostname
 echo "$HOSTNAME" > "$SDCARD/boot/firmware/hostname"
 
+# Create a default user on first boot to skip interactive user setup.
+USER_PASSWORD_HASH="$(openssl passwd -6 "$USER_PASSWORD")"
+echo "pi:$USER_PASSWORD_HASH" > "$SDCARD/boot/firmware/userconf.txt"
+
 # Disable password based authentication
 sed -i "s/#\{0,1\}PasswordAuthentication yes/PasswordAuthentication no/" "$SDCARD/etc/ssh/sshd_config"
 
@@ -267,6 +295,8 @@ printf "dtparam=act_led_trigger=actpwr\nenable_uart=1\ndtoverlay=mcp2515-can0,os
 
 # Disable serial console
 sed -i "s/console=serial0,115200 //" "$SDCARD/boot/firmware/cmdline.txt"
+# Disable Raspberry Pi first-boot init hook.
+sed -i "s# init=/usr/lib/raspberrypi-sys-mods/firstboot##g" "$SDCARD/boot/firmware/cmdline.txt"
 # Enable German locale
 sed -i "s/# de_DE.UTF-8 UTF-8/de_DE.UTF-8 UTF-8/" "$SDCARD/etc/locale.gen"
 # Enable US locale
@@ -274,7 +304,14 @@ sed -i "s/# en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/" "$SDCARD/etc/locale.gen"
 # Set Timezone
 echo "Europe/Berlin" > "$SDCARD/etc/timezone"
 # Set Keymap for vconsole
-echo "de-latin1" > "$SDCARD/etc/vconsole.conf"
+echo "$KEYBOARD_LAYOUT" > "$SDCARD/etc/vconsole.conf"
+cat <<EOF > "$SDCARD/etc/default/keyboard"
+XKBMODEL="pc105"
+XKBLAYOUT="$KEYBOARD_LAYOUT"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
+EOF
 
 # autostart canbus
 cat <<EOF > "$SDCARD/lib/systemd/system/canbus.service"
@@ -293,6 +330,11 @@ EOF
 # Add WiFi connection for automatic connection via NetworkManager.
 NM_CONNECTION_ID="$SSID"
 NM_CONNECTION_FILE="${SSID//\//_}.nmconnection"
+mkdir -p "$SDCARD/etc/NetworkManager/conf.d"
+cat <<EOF > "$SDCARD/etc/NetworkManager/conf.d/30-wifi-country.conf"
+[device]
+wifi.country=$WIFI_COUNTRY
+EOF
 mkdir -p "$SDCARD/etc/NetworkManager/system-connections"
 cat <<EOF > "$SDCARD/etc/NetworkManager/system-connections/${NM_CONNECTION_FILE}"
 [connection]
@@ -307,7 +349,7 @@ ssid=$SSID
 [wifi-security]
 auth-alg=open
 key-mgmt=wpa-psk
-psk=$PASSWORD
+psk=$WIFI_PASSWORD
 
 [ipv4]
 method=auto
@@ -316,6 +358,13 @@ method=auto
 method=auto
 EOF
 chmod 600 "$SDCARD/etc/NetworkManager/system-connections/${NM_CONNECTION_FILE}"
+
+# Keep country in wpa_supplicant as well for compatibility.
+mkdir -p "$SDCARD/etc/wpa_supplicant"
+if [[ -f "$SDCARD/etc/wpa_supplicant/wpa_supplicant.conf" ]]; then
+	sed -i '/^country=/d' "$SDCARD/etc/wpa_supplicant/wpa_supplicant.conf"
+fi
+printf "country=%s\n" "$WIFI_COUNTRY" >> "$SDCARD/etc/wpa_supplicant/wpa_supplicant.conf"
 
 set +x
 
