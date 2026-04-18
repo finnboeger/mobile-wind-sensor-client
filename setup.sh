@@ -40,6 +40,38 @@ prompt_if_empty() {
 	printf -v "$var_name" '%s' "$value"
 }
 
+prompt_password_with_confirmation() {
+	local var_name="$1"
+	local prompt_text="$2"
+	local value="${!var_name:-}"
+	local first
+	local second
+
+	if [[ -n "$value" ]]; then
+		return 0
+	fi
+
+	while true; do
+		read -r -s -p "$prompt_text: " first
+		echo
+		read -r -s -p "Confirm $prompt_text: " second
+		echo
+
+		if [[ -z "$first" ]]; then
+			echo "$prompt_text must not be empty."
+			continue
+		fi
+
+		if [[ "$first" != "$second" ]]; then
+			echo "Passwords do not match. Please try again."
+			continue
+		fi
+
+		printf -v "$var_name" '%s' "$first"
+		break
+	done
+}
+
 confirm_or_exit() {
 	local question="$1"
 	local answer
@@ -202,7 +234,7 @@ prompt_if_empty HOSTNAME "Hostname"
 prompt_if_empty SSHPUBKEY "Path to public SSH key"
 prompt_if_empty SSID "WiFi SSID"
 prompt_if_empty WIFI_PASSWORD "WiFi password" true
-prompt_if_empty USER_PASSWORD "Password for the system user (pi)" true
+prompt_password_with_confirmation USER_PASSWORD "Password for the system user (pi)"
 
 if [[ -z "$SDCARD" ]]; then
 	SDCARD="$(mktemp -d /tmp/windbot-sdcard.XXXXXX)"
