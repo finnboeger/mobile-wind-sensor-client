@@ -63,6 +63,29 @@ partition_path() {
 	fi
 }
 
+unmount_device_partitions() {
+	local device="$1"
+	local part
+	local -a partitions=()
+
+	mapfile -t partitions < <(lsblk -lnpo NAME,TYPE "$device" | awk '$2 == "part" { print $1 }')
+
+	if [[ ${#partitions[@]} -eq 0 ]]; then
+		return 0
+	fi
+
+	for ((i=${#partitions[@]}-1; i>=0; i--)); do
+		part="${partitions[$i]}"
+		if mount | awk -v p="$part" '$1 == p { found=1 } END { exit(found ? 0 : 1) }'; then
+			echo "Unmounting $part before flashing..."
+			if ! umount "$part"; then
+				echo "Failed to unmount $part. Please close processes using this device and try again." >&2
+				exit 1
+			fi
+		fi
+	done
+}
+
 cleanup_mounts() {
 	if [[ "$MOUNTED_BOOT" == "true" ]] && mountpoint -q "$SDCARD/boot/firmware"; then
 		umount "$SDCARD/boot/firmware" || echo "Warning: failed to unmount $SDCARD/boot/firmware" >&2
@@ -180,6 +203,7 @@ fi
 
 echo "About to run: dd if='$INPUT_FILE' of='$OUTPUT_DEVICE' bs=4M status=progress"
 confirm_or_exit "Proceed with flashing '$OUTPUT_DEVICE'?"
+unmount_device_partitions "$OUTPUT_DEVICE"
 
 # Flash SD Card with Raspberry Pi OS Lite
 dd if="$INPUT_FILE" of="$OUTPUT_DEVICE" bs=4M status=progress
