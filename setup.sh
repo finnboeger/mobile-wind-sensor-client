@@ -301,7 +301,8 @@ set -x
 touch "$SDCARD/boot/ssh"
 
 # Set the hostname
-echo "$HOSTNAME" > "$SDCARD/boot/firmware/hostname"
+echo "$HOSTNAME" > "$SDCARD/etc/hostname"
+sed -i "s/raspberrypi/$HOSTNAME/g" "$SDCARD/etc/hosts"
 
 # Create a default user on first boot to skip interactive user setup.
 USER_PASSWORD_HASH="$(openssl passwd -6 "$USER_PASSWORD")"
