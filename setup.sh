@@ -298,7 +298,7 @@ fi
 set -x
 
 # Enable ssh on first boot
-touch "$SDCARD/boot/ssh"
+touch "$SDCARD/boot/firmware/ssh"
 
 # Set the hostname
 echo "$HOSTNAME" > "$SDCARD/etc/hostname"
