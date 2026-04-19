@@ -329,6 +329,11 @@ printf "dtparam=act_led_trigger=actpwr\nenable_uart=1\ndtoverlay=mcp2515-can0,os
 sed -i "s/console=serial0,115200 //" "$SDCARD/boot/firmware/cmdline.txt"
 # Disable Raspberry Pi first-boot init hook.
 sed -i "s# init=/usr/lib/raspberrypi-sys-mods/firstboot##g" "$SDCARD/boot/firmware/cmdline.txt"
+# Set WLAN regulatory domain in kernel cmdline.
+sed -i \
+	-e "s/\s*cfg80211.ieee80211_regdom=\S*//" \
+	-e "s/\(.*\)/\1 cfg80211.ieee80211_regdom=$WIFI_COUNTRY/" \
+	"$SDCARD/boot/firmware/cmdline.txt"
 # Enable German locale
 sed -i "s/# de_DE.UTF-8 UTF-8/de_DE.UTF-8 UTF-8/" "$SDCARD/etc/locale.gen"
 # Enable US locale
@@ -387,8 +392,28 @@ method=auto
 EOF
 chmod 600 "$SDCARD/etc/NetworkManager/system-connections/${NM_CONNECTION_FILE}"
 
-# Set country in wpa_supplicant.conf to be picked up by init script
+# Set country in wpa_supplicant.conf to be picked up by first-boot networking.
+if [[ -f "$SDCARD/boot/firmware/wpa_supplicant.conf" ]]; then
+	sed -i '/^country=/d' "$SDCARD/boot/firmware/wpa_supplicant.conf"
+fi
 printf "country=%s\n" "$WIFI_COUNTRY" >> "$SDCARD/boot/firmware/wpa_supplicant.conf"
+
+# Emulate raspi-config rfkill/NetworkManager unblock behavior for first boot.
+mkdir -p "$SDCARD/var/lib/NetworkManager"
+cat <<EOF > "$SDCARD/var/lib/NetworkManager/NetworkManager.state"
+[main]
+NetworkingEnabled=true
+WirelessEnabled=true
+WWANEnabled=true
+EOF
+
+mkdir -p "$SDCARD/var/lib/systemd/rfkill"
+for filename in "$SDCARD"/var/lib/systemd/rfkill/*:wlan; do
+	if [[ ! -e "$filename" ]]; then
+		continue
+	fi
+	echo 0 > "$filename"
+done
 
 set +x
 
