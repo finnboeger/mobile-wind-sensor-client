@@ -327,8 +327,6 @@ printf "dtparam=act_led_trigger=actpwr\nenable_uart=1\ndtoverlay=mcp2515-can0,os
 
 # Disable serial console
 sed -i "s/console=serial0,115200 //" "$SDCARD/boot/firmware/cmdline.txt"
-# Disable Raspberry Pi first-boot init hook.
-sed -i "s# init=/usr/lib/raspberrypi-sys-mods/firstboot##g" "$SDCARD/boot/firmware/cmdline.txt"
 # Set WLAN regulatory domain in kernel cmdline.
 sed -i \
 	-e "s/\s*cfg80211.ieee80211_regdom=\S*//" \
