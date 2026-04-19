@@ -364,6 +364,52 @@ ExecStart=ip link set up can0 type can bitrate 250000
 WantedBy=multi-user.target
 EOF
 
+# Add post-first-boot setup script
+cat <<'EOF' > "$SDCARD/home/pi/windbot-post-firstboot.sh"
+#!/bin/bash
+
+set -euox pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+locale-gen de_DE.UTF-8 en_US.UTF-8
+update-locale LANG=en_US.UTF-8
+
+apt-get update
+apt-get -y upgrade
+apt-get -y install zsh tmux libi2c-dev can-utils python3-venv python3-setuptools libconfig-general-perl jq make gcc git
+
+systemctl enable canbus
+
+if [[ ! -d /home/pi/mobile-wind-sensor-client ]]; then
+	sudo -u pi git clone https://github.com/finnboeger/mobile-wind-sensor-client.git /home/pi/mobile-wind-sensor-client
+fi
+
+cat <<'UNIT' > /etc/systemd/system/windbot.service
+[Unit]
+Description=Start wind sensor client code
+After=canbus.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/mobile-wind-sensor-client
+ExecStart=/home/pi/mobile-wind-sensor-client/.venv/bin/python src/main.py
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl enable windbot
+
+if [[ -f /home/pi/mobile-wind-sensor-client/config.default.ini ]] && [[ ! -f /home/pi/mobile-wind-sensor-client/config.ini ]]; then
+	cp /home/pi/mobile-wind-sensor-client/config.default.ini /home/pi/mobile-wind-sensor-client/config.ini
+	chown pi:pi /home/pi/mobile-wind-sensor-client/config.ini
+fi
+
+EOF
+chmod 755 "$SDCARD/home/pi/windbot-post-firstboot.sh"
+chown 1000:1000 "$SDCARD/home/pi/windbot-post-firstboot.sh"
+
 # Add WiFi connection for automatic connection via NetworkManager.
 NM_CONNECTION_ID="$SSID"
 NM_CONNECTION_FILE="${SSID//\//_}.nmconnection"
