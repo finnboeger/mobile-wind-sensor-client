@@ -185,7 +185,7 @@ def publish_message(
         )
 
 
-def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
+def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:  # noqa: C901
     config = Config()
 
     if config.MQTT is None:
@@ -202,7 +202,8 @@ def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
         userdata=None,
         protocol=mqtt.MQTTv5,
     )
-    client.tls_set(tls_version=PROTOCOL_TLS)
+    if config.MQTT.USE_TLS:
+        client.tls_set(tls_version=PROTOCOL_TLS)
     client.username_pw_set(username=config.MQTT.USERNAME, password=config.MQTT.PASSWORD)
     client.on_connect = connect_callback  # pyright: ignore[reportAttributeAccessIssue]
     client.on_connect_fail = connect_fail_callback

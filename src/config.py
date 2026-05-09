@@ -36,6 +36,7 @@ class MQTTConfig:
     PORT: int
     USERNAME: str | None
     PASSWORD: str | None
+    USE_TLS: bool
     CLIENT_ID: str
     TOPIC: str
     QUEUE_SIZE: int
@@ -175,6 +176,7 @@ class Config:
             MQTTConfig(
                 BROKER=broker,
                 PORT=get(config, "MQTT", "PORT", int, 8883),
+                USE_TLS=get(config, "MQTT", "USE_TLS", parse_bool, True),
                 USERNAME=get_optional(config, "MQTT", "USERNAME", str),
                 PASSWORD=get_optional(config, "MQTT", "PASSWORD", str),
                 CLIENT_ID=get(config, "MQTT", "CLIENT_ID", str),
