@@ -50,6 +50,10 @@ class GPSConfig:
     PORTS: list[GPSPort]
 
 
+def parse_bool(value: str) -> bool:
+    return configparser.ConfigParser.BOOLEAN_STATES.get(value.lower(), False)
+
+
 class Config:
     """Singleton class to manage configuration settings."""
 
@@ -160,7 +164,7 @@ class Config:
                 config,
                 "NETWORK",
                 "ENABLE_LOCAL_WEBSERVER",
-                bool,
+                parse_bool,
                 fallback=False,
             ),
             AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
