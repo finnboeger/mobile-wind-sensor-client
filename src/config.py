@@ -188,7 +188,7 @@ class Config:
         )
         ports: list[GPSPort] = ["I2C", "UART1", "UART2", "USB", "SPI"]
         self.GPS = GPSConfig(
-            SERIAL_PORT=get(config, "GPS", "SERIAL_PORT", str, "/dev/ttyUSB0"),
+            SERIAL_PORT=get(config, "GPS", "SERIAL_PORT", str, "/dev/ttyACM0"),
             PORTS=[
                 port
                 for port in (

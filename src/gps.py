@@ -20,8 +20,6 @@ from ubx.nav_pvt import UbxNavPvt, parse_ubx_nav_pvt_message
 from ubx.shared_types import GnssFixType
 from utils.vector import Vector2D
 
-SERIAL_PORT = "/dev/ttyACM0"
-
 logger = logging.getLogger(__name__)
 
 ENABLED_MESSAGES = [
@@ -116,7 +114,11 @@ def send_configuration_message(
 
 
 def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
-    with serial.Serial(SERIAL_PORT, baudrate=115200, timeout=1) as console:
+    with serial.Serial(
+        config.Config().GPS.SERIAL_PORT,
+        baudrate=115200,
+        timeout=1,
+    ) as console:
         ubx_reader = pyubx2.UBXReader(
             console,
             protfilter=pyubx2.NMEA_PROTOCOL
