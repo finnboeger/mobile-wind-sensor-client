@@ -354,11 +354,12 @@ EOF
 cat <<EOF > "$SDCARD/lib/systemd/system/canbus.service"
 [Unit]
 Description=Start CAN Bus
-After=multi-user.target
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=ip link set up can0 type can bitrate 250000
+ExecStop=ip link set down can0
 
 [Install]
 WantedBy=multi-user.target
@@ -388,6 +389,7 @@ fi
 cat <<'UNIT' > /etc/systemd/system/windbot.service
 [Unit]
 Description=Start wind sensor client code
+Wants=canbus.service
 After=canbus.service
 
 [Service]
