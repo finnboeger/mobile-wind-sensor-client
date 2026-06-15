@@ -1,5 +1,7 @@
 import logging
 import logging.handlers
+from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +25,12 @@ _DATA_FORMATTER = logging.Formatter("%(created).3f" + DATA_SEPARATOR + "%(messag
 _data_loggers: dict[str, logging.Logger] = {}
 
 
+@lru_cache(maxsize=1)
+def _get_timestamped_dir(base_dir: str) -> Path:
+    timestamp_dir = datetime.now(tz=UTC).astimezone().strftime("%Y-%m-%d_%H:%M")
+    return Path(base_dir) / timestamp_dir
+
+
 def _build_rotating_handler(file_path: str) -> logging.Handler:
     handler = logging.handlers.RotatingFileHandler(
         file_path,
@@ -39,7 +47,7 @@ def _get_data_logger(consumer: str) -> logging.Logger | None:
     if config.LOGGING.DATA_LOG_DIR is None:
         return None
 
-    log_dir = Path(config.LOGGING.DATA_LOG_DIR)
+    log_dir = _get_timestamped_dir(config.LOGGING.DATA_LOG_DIR)
     log_dir.mkdir(parents=True, exist_ok=True)
     file_path = str(log_dir / f"{consumer}.log")
     logger_name = f"data.{consumer}"
