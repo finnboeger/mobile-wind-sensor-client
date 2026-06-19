@@ -136,6 +136,13 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
             "NAV-ATT, NAV-PVT, NAV-DOP, NAV-SAT, ESF-ALG, ESF-STATUS, HNR-PVT",
         )
         enable_ubx_messages(ubx_reader)
+        # poll settings on startup
+        if not isinstance(ubx_reader.datastream, serial.Serial):
+            error_message = "UBXReader datastream is not a serial port."
+            raise TypeError(error_message)
+        ubx_reader.datastream.write(
+            pyubx2.UBXMessage("CFG", "CFG-NAVX5", pyubx2.POLL).serialize(),
+        )
         while True:
             raw_data, parsed_data = ubx_reader.read()
             if parsed_data is None:
@@ -144,6 +151,8 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
             if not isinstance(parsed_data, pyubx2.UBXMessage):
                 logger.warning("Received non-UBX message: %s", parsed_data)
                 continue
+            if parsed_data.identity == "CFG-NAVX5":
+                logger.debug("Current NAVX5 config: %s", parsed_data)
             queue.put(parsed_data)
             log.data("gps", parsed_data)
 
