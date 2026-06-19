@@ -13,6 +13,8 @@ import serial
 import config
 import log
 from structs import PositionData
+from ubx.esf_alg import parse_ubx_esf_alg_message
+from ubx.esf_status import parse_ubx_esf_status_message
 from ubx.hnr_pvt import UbxHnrPvt, parse_ubx_hnr_pvt_message
 from ubx.nav_dgps import parse_ubx_nav_dgps_message
 from ubx.nav_dop import parse_ubx_nav_dop_message
@@ -153,6 +155,18 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
                 continue
             if parsed_data.identity == "CFG-NAVX5":
                 logger.debug("Current NAVX5 config: %s", parsed_data)
+            elif parsed_data.identity == "ESF-STATUS":
+                message = parse_ubx_esf_status_message(parsed_data)
+                logger.debug(
+                    "Sensor fusion: %s",
+                    message,
+                )
+            elif parsed_data.identity == "ESF-ALG":
+                message = parse_ubx_esf_alg_message(parsed_data)
+                logger.debug(
+                    "Fusion algorithm: %s",
+                    message,
+                )
             queue.put(parsed_data)
             log.data("gps", parsed_data)
 
