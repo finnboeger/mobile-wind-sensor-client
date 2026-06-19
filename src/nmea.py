@@ -96,14 +96,13 @@ def forward_position(
     input_queue: PositionQueue,
 ) -> None:
     """
-    Forward position data from the input to the NMEA2000 network and the output queue.
+    Forward position data from the input to the NMEA2000 network.
 
     Note: The Garmin display GMI20 only displays the GPS data if the COG/SOG message
     is sent as well, and also has both its fields set to a proper value (i.e. not None).
 
     :param n2k_node: NMEA2000 Node to send messages through.
     :param input_queue: Input queue containing position data.
-    :param output_queue: Output queue to forward position data.
     """
     while True:
         position = None
@@ -150,12 +149,15 @@ def forward_position(
         n2k_node.send_msg(message)
 
 
+wind_forwarding_buffer = []
+
+
 def forward_wind(
     n2k_node: n2k.Node,
     queue: WindOutputQueue,
 ) -> None:
     """
-    Forward wind data from the input to the NMEA2000 network and the output queue.
+    Forward wind data from the input to the NMEA2000 network.
 
     Both the corrected apparent wind (original apparent wind combined with heading data
     to calculate the apparent wind direction instead of angle) and the true wind data
@@ -163,7 +165,6 @@ def forward_wind(
 
     :param n2k_node: NMEA2000 Node to send messages through.
     :param input_queue: Input queue containing position data.
-    :param output_queue: Output queue to forward position data.
     """
     while True:
         apparent_wind_data, true_wind_data = queue.get()
