@@ -27,7 +27,7 @@ _data_loggers: dict[str, logging.Logger] = {}
 
 @lru_cache(maxsize=1)
 def _get_timestamped_dir(base_dir: str) -> Path:
-    timestamp_dir = datetime.now(tz=UTC).astimezone().strftime("%Y-%m-%d_%H:%M")
+    timestamp_dir = datetime.now(tz=UTC).astimezone().strftime("%Y-%m-%d_%H-%M")
     return Path(base_dir) / timestamp_dir
 
 
