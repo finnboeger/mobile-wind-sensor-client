@@ -103,7 +103,10 @@ def connect_callback(
 
     if not reason_code.is_failure:
         connection_status["state"] = "success"
-        logger.debug("Connected to MQTT broker")
+        logger.debug(
+            "Connected to MQTT broker with response: %s",
+            reason_code.getName(),
+        )
         return
 
     connection_status["state"] = "fail"
