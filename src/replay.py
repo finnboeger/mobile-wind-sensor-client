@@ -21,6 +21,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from queue import Queue
 from typing import Any, Final
@@ -51,6 +52,7 @@ UI_REFRESH_MS: Final[int] = 50
 MAX_SPEED: Final[float] = 64.0
 MIN_SPEED: Final[float] = 0.1
 GPS_MAX_LINES_PER_MESSAGE: Final[int] = 4
+FAST_FORWARD_IDLE_ROUNDS: Final[int] = 3
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -179,6 +181,55 @@ def load_events(files: list[Path]) -> list[ReplayEvent]:
     return events
 
 
+def _parse_utc_datetime(raw: str) -> datetime:
+    normalized = raw.strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as ex:
+        msg = (
+            "Invalid --jump value. Use seconds since start "
+            "(example: 90.5) or UTC datetime "
+            "(example: 2026-06-20T10:00:00Z)."
+        )
+        raise argparse.ArgumentTypeError(msg) from ex
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+
+    return parsed.astimezone(UTC)
+
+
+def _resolve_jump_time(events: list[ReplayEvent], jump: str | None) -> float:
+    if jump is None:
+        return events[0].log_time
+
+    first = events[0].log_time
+    last = events[-1].log_time
+    raw = jump.strip()
+
+    try:
+        offset_s = float(raw)
+    except ValueError:
+        target = _parse_utc_datetime(raw).timestamp()
+    else:
+        if offset_s < 0:
+            msg = "--jump seconds since start must be >= 0."
+            raise argparse.ArgumentTypeError(msg)
+        target = first + offset_s
+
+    if target < first:
+        msg = "--jump points before the first event in the selected logs."
+        raise argparse.ArgumentTypeError(msg)
+    if target > last:
+        msg = "--jump points after the last event in the selected logs."
+        raise argparse.ArgumentTypeError(msg)
+
+    return target
+
+
 def _fmt_angle(rad: float | None) -> str:
     if rad is None:
         return "-"
@@ -272,6 +323,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
     tail: int,
     start_paused: bool,
     features: list[str],
+    jump_to: float | None,
 ) -> None:
     init_logging()
 
@@ -345,11 +397,47 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
         ):
             logged_corr_app.append((evt.log_time, evt.payload))
 
-    def drain_calc_outputs(now_replay_time: float) -> None:
+    def drain_calc_outputs(now_replay_time: float) -> int:
+        drained = 0
         while not calc_out_queue.empty():
             corr, tw = calc_out_queue.get()
             calc_corr_app.append((now_replay_time, corr))
             calc_true_wind.append((now_replay_time, tw))
+            drained += 1
+        return drained
+
+    def settle_worker_outputs(now_replay_time: float) -> None:
+        # Fast-forward mode: yield briefly until worker input and output queues settle.
+        idle_rounds = 0
+        max_rounds = 4000
+        for _ in range(max_rounds):
+            drained = drain_calc_outputs(now_replay_time)
+            pending_inputs = (
+                not position_queue.empty()
+                or not heading_queue.empty()
+                or not wind_queue.empty()
+            )
+            pending_outputs = not calc_out_queue.empty()
+
+            if pending_inputs or pending_outputs or drained > 0:
+                idle_rounds = 0
+                if drained == 0:
+                    time.sleep(0.001)
+                continue
+
+            idle_rounds += 1
+            if idle_rounds >= FAST_FORWARD_IDLE_ROUNDS:
+                break
+            time.sleep(0.001)
+
+    if jump_to is not None and jump_to > events[0].log_time:
+        replay_time = min(jump_to, events[-1].log_time)
+        while idx < len(events) and events[idx].log_time <= replay_time:
+            process_event(events[idx])
+            idx += 1
+        settle_worker_outputs(replay_time)
+        paused = True
+        last_real = time.time()
 
     while True:
         ch = stdscr.getch()
@@ -554,6 +642,16 @@ def main() -> None:
             "Default is none (all optional features disabled)."
         ),
     )
+    parser.add_argument(
+        "--jump",
+        type=str,
+        default=None,
+        help=(
+            "Jump to a point in the replay. Accepts seconds since the first "
+            "event (example: 90.5) or an absolute UTC timestamp "
+            "(example: 2026-06-20T10:00:00Z)."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -569,6 +667,8 @@ def main() -> None:
         msg = f"No events loaded from: {joined}"
         raise SystemExit(msg)
 
+    jump_time = _resolve_jump_time(events, args.jump)
+
     curses.wrapper(
         run_tui,
         events=events,
@@ -576,6 +676,7 @@ def main() -> None:
         tail=int(args.tail),
         start_paused=bool(args.paused),
         features=[x.strip() for x in args.features.split(",")],
+        jump_to=jump_time if args.jump is not None else None,
     )
 
 
