@@ -24,8 +24,8 @@ logger = logging.getLogger(__name__)
 #: the north of the measurement unit is offset clockwise from the compass north.
 COMPASS_OFFSET = math.radians(config.Config().SENSOR.COMPASS_OFFSET_DEGREES)
 
-#: amount of seconds to average wind data over
-WIND_AVERAGING_SECONDS = 5
+#: amount of milliseconds to average wind data over
+WIND_AVERAGING_MILLISECONDS = 5 * 1000
 
 
 def read_position_queue(
@@ -93,8 +93,8 @@ def worker(
     latest_position_time: int | None = None
     current_heading: HeadingData | None = None
     # store the wind vectors of the last few seconds to compute an average
-    true_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_SECONDS)
-    apparent_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_SECONDS)
+    true_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_MILLISECONDS)
+    apparent_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_MILLISECONDS)
 
     while True:
         # get wind data, blocking
@@ -189,7 +189,7 @@ def worker(
         if logger.getEffectiveLevel() <= logging.DEBUG:
             logger.debug(
                 "Average True Wind (%d seconds): %.2fkts from %.1f°",
-                WIND_AVERAGING_SECONDS,
+                WIND_AVERAGING_MILLISECONDS,
                 n2k.utils.meters_per_second_to_knots(average_true_wind.wind_speed),
                 n2k.utils.rad_to_deg(average_true_wind.wind_angle),
             )
@@ -202,7 +202,7 @@ def worker(
 
             logger.debug(
                 "Average Apparent Wind (%d seconds): %.2fkts from %.1f°",
-                WIND_AVERAGING_SECONDS,
+                WIND_AVERAGING_MILLISECONDS,
                 n2k.utils.meters_per_second_to_knots(average_apparent_wind.wind_speed),
                 n2k.utils.rad_to_deg(average_apparent_wind.wind_angle),
             )
