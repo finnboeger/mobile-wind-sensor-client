@@ -266,6 +266,9 @@ def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None: 
         wind_buffer = [w for w in wind_buffer if sec_wind(w) > timestamp_s]
         position_buffer = [p for p in position_buffer if sec_position(p) > timestamp_s]
 
+        if len(wind_buffer) == 0:
+            continue
+
         # If one of the buckets is empty,
         # advance to the first second that exists in both.
         if len(current_values["apparent"]) == 0 or len(current_values["position"]) == 0:
