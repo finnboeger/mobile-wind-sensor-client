@@ -62,6 +62,25 @@ class HeadingData:
 
 
 @dataclass(frozen=True, kw_only=True)
+class CompassSample:
+    """
+    One reading of the magnetometer and IMU, in the boat's body frame.
+
+    The body frame has x pointing forward, y to starboard and z down.
+    """
+
+    #: timestamp in milliseconds since epoch
+    timestamp: int
+    #: accelerometer reading (specific force) in m/s². Level and at rest it is
+    #: ``(0, 0, -9.81)``.
+    acceleration: tuple[float, float, float]
+    #: angular rate in rad/s
+    angular_rate: tuple[float, float, float]
+    #: magnetic field in µT, before calibration
+    magnetic_field: tuple[float, float, float]
+
+
+@dataclass(frozen=True, kw_only=True)
 class VelocityData:
     """Filtered velocity over ground at the time of a wind measurement."""
 
@@ -98,4 +117,5 @@ class TrueWindData(WindData):
 
 
 PositionQueue: TypeAlias = Queue[PositionData]
+HeadingQueue: TypeAlias = Queue[HeadingData]
 WindOutputQueue: TypeAlias = Queue[tuple[CorrectedApparentWindData, TrueWindData]]

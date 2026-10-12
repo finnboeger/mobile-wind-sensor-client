@@ -9,7 +9,7 @@ import nmea
 import wind
 from config import Config
 from log import DATA_SEPARATOR
-from structs import PositionQueue, WindOutputQueue
+from structs import HeadingQueue, PositionQueue, WindOutputQueue
 
 
 def init_logging() -> None:
@@ -65,6 +65,12 @@ if __name__ == "__main__":
     nmea_wind_queue: WindOutputQueue = Queue()
     wind_output_queues: list[WindOutputQueue] = [nmea_wind_queue]
 
+    compass_config = Config().COMPASS
+    use_magnetometer = compass_config.SOURCE == "magnetometer"
+    compass_position_queue: PositionQueue = Queue()
+    if use_magnetometer:
+        position_output_queues.append(compass_position_queue)
+
     if Config().MQTT is not None:
         mqtt_position_queue: PositionQueue = Queue()
         mqtt_wind_queue: WindOutputQueue = Queue()
@@ -74,7 +80,27 @@ if __name__ == "__main__":
         mqtt.init(mqtt_position_queue, mqtt_wind_queue)
 
     gps.init(position_output_queues)
-    n2k_node, heading_queue, wind_queue = nmea.init()
+    n2k_node, heading_queue, wind_queue = nmea.init(read_heading=not use_magnetometer)
+
+    if use_magnetometer:
+        # imported here so smbus2 is only needed with a local magnetometer
+        from compass import worker as compass_worker
+
+        heading_queue = Queue()
+        heading_output_queues: list[HeadingQueue] = [heading_queue]
+        if compass_config.SEND_HEADING:
+            nmea_heading_queue: HeadingQueue = Queue()
+            heading_output_queues.append(nmea_heading_queue)
+            threading.Thread(
+                target=nmea.forward_heading,
+                args=(n2k_node, nmea_heading_queue),
+                kwargs={
+                    "true_heading": compass_config.GNSS_ALIGNMENT
+                    or compass_config.DECLINATION_DEGREES != 0,
+                },
+                daemon=True,
+            ).start()
+        compass_worker.init(compass_position_queue, heading_output_queues)
 
     # Forward the GPS data to the NMEA2000 network
     threading.Thread(
