@@ -16,6 +16,7 @@ config = Config()
 DataConsumer = Literal[
     "gps",
     "position",
+    "velocity",
     "heading",
     "wind",
     "true_wind",

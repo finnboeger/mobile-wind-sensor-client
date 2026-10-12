@@ -69,6 +69,16 @@ class GPSConfig:
     NAVIGATION_RATE_HZ: float
 
 
+@dataclass(frozen=True, kw_only=True)
+class FilterConfig:
+    #: use the Kalman filter for the boat velocity instead of averaging GPS samples
+    ENABLED: bool
+    #: typical acceleration of the boat in m/s²
+    ACCELERATION_SIGMA: float
+    #: time constant in seconds after which an acceleration has decayed to 1/e
+    ACCELERATION_TIME_CONSTANT: float
+
+
 def parse_bool(value: str) -> bool:
     return configparser.ConfigParser.BOOLEAN_STATES.get(value.lower(), False)
 
@@ -83,6 +93,7 @@ class Config:
     NETWORK: NetworkConfig
     MQTT: MQTTConfig | None
     GPS: GPSConfig
+    FILTER: FilterConfig
 
     def __new__(cls) -> "Config":
         if cls._instance is None:
@@ -230,6 +241,17 @@ class Config:
                 "sea",
             ),
             NAVIGATION_RATE_HZ=get(config, "GPS", "NAVIGATION_RATE_HZ", float, 2.0),
+        )
+        self.FILTER = FilterConfig(
+            ENABLED=get(config, "FILTER", "ENABLED", parse_bool, True),
+            ACCELERATION_SIGMA=get(config, "FILTER", "ACCELERATION_SIGMA", float, 0.3),
+            ACCELERATION_TIME_CONSTANT=get(
+                config,
+                "FILTER",
+                "ACCELERATION_TIME_CONSTANT",
+                float,
+                2.0,
+            ),
         )
 
     def __repr__(self) -> str:
