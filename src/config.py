@@ -45,10 +45,28 @@ class MQTTConfig:
 GPSPort = Literal["I2C", "UART1", "UART2", "USB", "SPI"]
 
 
+#: u-blox dynamic platform models (CFG-NAV5 dynModel)
+GPS_DYNAMIC_MODELS: dict[str, int] = {
+    "portable": 0,
+    "stationary": 2,
+    "pedestrian": 3,
+    "automotive": 4,
+    "sea": 5,
+    "airborne1g": 6,
+    "airborne2g": 7,
+    "airborne4g": 8,
+    "wrist": 9,
+}
+
+
 @dataclass(frozen=True, kw_only=True)
 class GPSConfig:
     SERIAL_PORT: str
     PORTS: list[GPSPort]
+    #: name of the dynamic platform model, a key of GPS_DYNAMIC_MODELS
+    DYNAMIC_MODEL: str
+    #: GNSS navigation rate in Hz
+    NAVIGATION_RATE_HZ: float
 
 
 def parse_bool(value: str) -> bool:
@@ -127,6 +145,13 @@ class Config:
             logger.warning("%s is not a valid log level. Defaulting to WARNING.", level)
             return logging.WARNING
 
+        def parse_dynamic_model(model: str) -> str:
+            normalized = model.strip().lower()
+            if normalized in GPS_DYNAMIC_MODELS:
+                return normalized
+            logger.warning("%s is not a valid dynamic model. Defaulting to sea.", model)
+            return "sea"
+
         self.SENSOR = SensorConfig(
             COMPASS_OFFSET_DEGREES=get(
                 config,
@@ -197,6 +222,14 @@ class Config:
                 )
                 if port in ports
             ],
+            DYNAMIC_MODEL=get(
+                config,
+                "GPS",
+                "DYNAMIC_MODEL",
+                parse_dynamic_model,
+                "sea",
+            ),
+            NAVIGATION_RATE_HZ=get(config, "GPS", "NAVIGATION_RATE_HZ", float, 2.0),
         )
 
     def __repr__(self) -> str:

@@ -73,6 +73,36 @@ def enable_ubx_messages(ubr: pyubx2.UBXReader) -> None:
         send_configuration_message(ubr, message_type, 1)
 
 
+def configure_navigation(ubr: pyubx2.UBXReader) -> None:
+    """Set the dynamic platform model and the navigation rate of the receiver."""
+    gps_config = config.Config().GPS
+    if not isinstance(ubr.datastream, serial.Serial):
+        error_message = "UBXReader datastream is not a serial port."
+        raise TypeError(error_message)
+
+    # only apply the dynamic model, leave all other navigation settings untouched
+    ubr.datastream.write(
+        pyubx2.UBXMessage(
+            "CFG",
+            "CFG-NAV5",
+            pyubx2.SET,
+            dyn=1,
+            dynModel=config.GPS_DYNAMIC_MODELS[gps_config.DYNAMIC_MODEL],
+        ).serialize(),
+    )
+
+    ubr.datastream.write(
+        pyubx2.UBXMessage(
+            "CFG",
+            "CFG-RATE",
+            pyubx2.SET,
+            measRate=round(1000 / gps_config.NAVIGATION_RATE_HZ),
+            navRate=1,
+            timeRef=1,  # GPS time
+        ).serialize(),
+    )
+
+
 def send_configuration_message(
     ubr: pyubx2.UBXReader,
     message_type: bytes,
@@ -136,12 +166,24 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
             "NAV-ATT, NAV-PVT, NAV-DOP, NAV-SAT, ESF-ALG, ESF-STATUS, HNR-PVT",
         )
         enable_ubx_messages(ubx_reader)
+        logger.debug(
+            "Setting dynamic model to %s and navigation rate to %.1f Hz",
+            config.Config().GPS.DYNAMIC_MODEL,
+            config.Config().GPS.NAVIGATION_RATE_HZ,
+        )
+        configure_navigation(ubx_reader)
         # poll settings on startup
         if not isinstance(ubx_reader.datastream, serial.Serial):
             error_message = "UBXReader datastream is not a serial port."
             raise TypeError(error_message)
         ubx_reader.datastream.write(
             pyubx2.UBXMessage("CFG", "CFG-NAVX5", pyubx2.POLL).serialize(),
+        )
+        ubx_reader.datastream.write(
+            pyubx2.UBXMessage("CFG", "CFG-NAV5", pyubx2.POLL).serialize(),
+        )
+        ubx_reader.datastream.write(
+            pyubx2.UBXMessage("CFG", "CFG-RATE", pyubx2.POLL).serialize(),
         )
         while True:
             raw_data, parsed_data = ubx_reader.read()
@@ -151,8 +193,8 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
             if not isinstance(parsed_data, pyubx2.UBXMessage):
                 logger.warning("Received non-UBX message: %s", parsed_data)
                 continue
-            if parsed_data.identity == "CFG-NAVX5":
-                logger.debug("Current NAVX5 config: %s", parsed_data)
+            if parsed_data.identity in ("CFG-NAVX5", "CFG-NAV5", "CFG-RATE"):
+                logger.debug("Current %s config: %s", parsed_data.identity, parsed_data)
             queue.put(parsed_data)
             log.data("gps", parsed_data)
 
