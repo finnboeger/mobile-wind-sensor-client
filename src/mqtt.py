@@ -4,7 +4,6 @@ import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from ssl import PROTOCOL_TLS
-from time import sleep
 from typing import Any, Final
 
 import n2k
@@ -24,8 +23,6 @@ from structs import (
 from utils.vector import PolarCoordinates, Vector2D
 
 logger = logging.getLogger(__name__)
-
-MAX_INITIAL_CONNECTION_ATTEMPTS: Final = 5
 
 
 def _avg(values: Iterable[float]) -> float:
@@ -86,10 +83,11 @@ def _avg_wind(
     )
 
 
-connection_status = {
-    "state": None,
-    "error_count": 0,
-}
+# Keepalive in seconds. A dead connection (e.g. the modem re-attached with a new IP)
+# is only noticed after up to two keepalive intervals, so keep this short.
+KEEPALIVE_S: Final = 30
+RECONNECT_MIN_DELAY_S: Final = 1
+RECONNECT_MAX_DELAY_S: Final = 30
 
 
 def connect_callback(
@@ -99,52 +97,32 @@ def connect_callback(
     reason_code: mqtt_reasoncodes.ReasonCode,
     _properties: mqtt_properties.Properties,
 ) -> None:
-    global connection_status  # noqa: PLW0602
-
     if not reason_code.is_failure:
-        connection_status["state"] = "success"
-        logger.debug(
+        logger.info(
             "Connected to MQTT broker with response: %s",
             reason_code.getName(),
         )
         return
 
-    connection_status["state"] = "fail"
-    connection_status["error_count"] += 1
     logger.error(
-        "Failed to connect to MQTT broker with error: %s (Attempt number: %d)",
+        "Failed to connect to MQTT broker with error: %s",
         reason_code.getName(),
-        connection_status["error_count"],
     )
 
 
 def connect_fail_callback(_client: mqtt.Client, _userdata: Any) -> None:  # noqa: ANN401
-    global connection_status  # noqa: PLW0602
-    logger.error("Failed to connect to MQTT broker due to network error")
-    connection_status["state"] = "fail"
-    connection_status["error_count"] += 1
+    logger.warning("Failed to connect to MQTT broker due to network error, retrying")
 
 
-def wait_for_connection(client: mqtt.Client) -> bool:
-    global connection_status  # noqa: PLW0602
-
-    while connection_status["state"] is None:
-        sleep(0.1)
-
-    while (
-        connection_status["state"] == "fail"
-        and connection_status["error_count"] < MAX_INITIAL_CONNECTION_ATTEMPTS
-    ):
-        sleep(0.1)
-    if connection_status["state"] == "fail":
-        logger.error(
-            "Failed to connect to MQTT broker after %d attempts.",
-            connection_status["error_count"],
-        )
-        client.loop_stop()
-        return False
-
-    return True
+def disconnect_callback(
+    _client: mqtt.Client,
+    _userdata: Any,  # noqa: ANN401
+    reason: mqtt_reasoncodes.ReasonCode | int,
+    _properties: mqtt_properties.Properties | None,
+) -> None:
+    # Called with the paho v1 callback signature for MQTTv5: the reason is a
+    # ReasonCode if the broker sent a DISCONNECT, otherwise a local error code.
+    logger.warning("Disconnected from MQTT broker (%s), reconnecting", reason)
 
 
 def publish_message(
@@ -172,7 +150,13 @@ def publish_message(
     }
 
     message_info = client.publish(topic, json.dumps(payload), qos=0)
-    if message_info.rc != mqtt.MQTT_ERR_SUCCESS:
+    if message_info.rc == mqtt.MQTT_ERR_NO_CONN:
+        # Expected while offline, the disconnect itself is logged once.
+        logger.debug(
+            "Dropped MQTT message for timestamp %d, not connected",
+            timestamp_s,
+        )
+    elif message_info.rc != mqtt.MQTT_ERR_SUCCESS:
         logger.error(
             "Failed to publish MQTT message for timestamp %d "
             "to topic %s with error code %d",
@@ -210,11 +194,16 @@ def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None: 
     client.username_pw_set(username=config.MQTT.USERNAME, password=config.MQTT.PASSWORD)
     client.on_connect = connect_callback  # pyright: ignore[reportAttributeAccessIssue]
     client.on_connect_fail = connect_fail_callback
-    client.connect(config.MQTT.BROKER, config.MQTT.PORT)
+    client.on_disconnect = disconnect_callback  # pyright: ignore[reportAttributeAccessIssue]
+    client.reconnect_delay_set(
+        min_delay=RECONNECT_MIN_DELAY_S,
+        max_delay=RECONNECT_MAX_DELAY_S,
+    )
+    # connect_async + loop_start retries forever, including the first connection.
+    # A blocking connect() raises when the modem is not online yet (e.g. right
+    # after boot), which would end this thread and stop all MQTT uploads.
+    client.connect_async(config.MQTT.BROKER, config.MQTT.PORT, keepalive=KEEPALIVE_S)
     client.loop_start()
-
-    if not wait_for_connection(client):
-        return
 
     # Wait for both queues to produce at least one message.
     wind_buffer: list[tuple[CorrectedApparentWindData, TrueWindData]] = [
