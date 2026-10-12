@@ -38,6 +38,17 @@ class PositionData:
     positional_dilution_of_precision: float | None = None  # Used when forwarding
     #: Horizontal dilution of precision in meters.
     horizontal_dilution_of_precision: float | None = None  # Used when forwarding
+    #: North component of the velocity over ground in m/s
+    velocity_north: float | None = None  # Used for calc
+    #: East component of the velocity over ground in m/s
+    velocity_east: float | None = None  # Used for calc
+    #: Speed accuracy estimate (one standard deviation) in m/s
+    speed_accuracy: float | None = None  # Used for calc
+    #: Horizontal position accuracy estimate (one standard deviation) in meters
+    horizontal_accuracy: float | None = None
+    #: UBX message this position was created from, e.g. "NAV-PVT" or "HNR-PVT".
+    #: None for data logged before this field existed.
+    source: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -47,6 +58,18 @@ class HeadingData:
     #: heading in radians, 0 is north, positive is clockwise
     heading: float
     #: timestamp of the heading data in milliseconds
+    timestamp: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class VelocityData:
+    """Filtered velocity over ground at the time of a wind measurement."""
+
+    #: North component of the velocity in m/s
+    velocity_north: float
+    #: East component of the velocity in m/s
+    velocity_east: float
+    #: timestamp the velocity was evaluated at, in milliseconds
     timestamp: int
 
 

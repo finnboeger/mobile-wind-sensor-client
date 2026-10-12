@@ -18,7 +18,7 @@ from ubx.nav_dgps import parse_ubx_nav_dgps_message
 from ubx.nav_dop import parse_ubx_nav_dop_message
 from ubx.nav_pvt import UbxNavPvt, parse_ubx_nav_pvt_message
 from ubx.shared_types import GnssFixType
-from utils.vector import Vector2D
+from utils.vector import PolarCoordinates, Vector2D
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,36 @@ def enable_ubx_messages(ubr: pyubx2.UBXReader) -> None:
     for message_id in ENABLED_MESSAGES:
         message_type = key_from_val(pyubx2.ubxtypes_core.UBX_MSGIDS, message_id)
         send_configuration_message(ubr, message_type, 1)
+
+
+def configure_navigation(ubr: pyubx2.UBXReader) -> None:
+    """Set the dynamic platform model and the navigation rate of the receiver."""
+    gps_config = config.Config().GPS
+    if not isinstance(ubr.datastream, serial.Serial):
+        error_message = "UBXReader datastream is not a serial port."
+        raise TypeError(error_message)
+
+    # only apply the dynamic model, leave all other navigation settings untouched
+    ubr.datastream.write(
+        pyubx2.UBXMessage(
+            "CFG",
+            "CFG-NAV5",
+            pyubx2.SET,
+            dyn=1,
+            dynModel=config.GPS_DYNAMIC_MODELS[gps_config.DYNAMIC_MODEL],
+        ).serialize(),
+    )
+
+    ubr.datastream.write(
+        pyubx2.UBXMessage(
+            "CFG",
+            "CFG-RATE",
+            pyubx2.SET,
+            measRate=round(1000 / gps_config.NAVIGATION_RATE_HZ),
+            navRate=1,
+            timeRef=1,  # GPS time
+        ).serialize(),
+    )
 
 
 def send_configuration_message(
@@ -136,12 +166,24 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
             "NAV-ATT, NAV-PVT, NAV-DOP, NAV-SAT, ESF-ALG, ESF-STATUS, HNR-PVT",
         )
         enable_ubx_messages(ubx_reader)
+        logger.debug(
+            "Setting dynamic model to %s and navigation rate to %.1f Hz",
+            config.Config().GPS.DYNAMIC_MODEL,
+            config.Config().GPS.NAVIGATION_RATE_HZ,
+        )
+        configure_navigation(ubx_reader)
         # poll settings on startup
         if not isinstance(ubx_reader.datastream, serial.Serial):
             error_message = "UBXReader datastream is not a serial port."
             raise TypeError(error_message)
         ubx_reader.datastream.write(
             pyubx2.UBXMessage("CFG", "CFG-NAVX5", pyubx2.POLL).serialize(),
+        )
+        ubx_reader.datastream.write(
+            pyubx2.UBXMessage("CFG", "CFG-NAV5", pyubx2.POLL).serialize(),
+        )
+        ubx_reader.datastream.write(
+            pyubx2.UBXMessage("CFG", "CFG-RATE", pyubx2.POLL).serialize(),
         )
         while True:
             raw_data, parsed_data = ubx_reader.read()
@@ -151,8 +193,8 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
             if not isinstance(parsed_data, pyubx2.UBXMessage):
                 logger.warning("Received non-UBX message: %s", parsed_data)
                 continue
-            if parsed_data.identity == "CFG-NAVX5":
-                logger.debug("Current NAVX5 config: %s", parsed_data)
+            if parsed_data.identity in ("CFG-NAVX5", "CFG-NAV5", "CFG-RATE"):
+                logger.debug("Current %s config: %s", parsed_data.identity, parsed_data)
             queue.put(parsed_data)
             log.data("gps", parsed_data)
 
@@ -213,6 +255,20 @@ def log_position_info(last_position: PositionData, position: PositionData) -> No
         )
 
 
+def velocity_over_ground(message: UbxNavPvt | UbxHnrPvt) -> Vector2D:
+    """Return the velocity over ground in m/s, x is north and y is east."""
+    if isinstance(message, UbxNavPvt):
+        return Vector2D(x=message.vel_n / 1000, y=message.vel_e / 1000)
+
+    # HNR-PVT only reports ground speed and heading of motion
+    return Vector2D.from_polar(
+        PolarCoordinates(
+            angle=math.radians(message.heading_of_motion),
+            magnitude=message.ground_speed / 1000,
+        ),
+    )
+
+
 def worker(
     message_queue: Queue[pyubx2.UBXMessage],
     output_queues: list[Queue[PositionData]],
@@ -235,6 +291,8 @@ def worker(
 
     def submit_position_data(message: UbxNavPvt | UbxHnrPvt) -> None:
         nonlocal last_position
+
+        velocity = velocity_over_ground(message)
 
         position = PositionData(
             timestamp=(
@@ -271,6 +329,11 @@ def worker(
             number_satellites_used=number_of_satellites_used,
             positional_dilution_of_precision=positional_dilution_of_precision,
             horizontal_dilution_of_precision=horizontal_dilution_of_precision,
+            velocity_north=velocity.x,
+            velocity_east=velocity.y,
+            speed_accuracy=message.speed_accuracy / 1000,
+            horizontal_accuracy=message.horizontal_accuracy / 1000,
+            source="NAV-PVT" if isinstance(message, UbxNavPvt) else "HNR-PVT",
         )
 
         if last_position is not None:

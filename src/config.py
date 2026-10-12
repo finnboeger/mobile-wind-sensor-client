@@ -45,10 +45,38 @@ class MQTTConfig:
 GPSPort = Literal["I2C", "UART1", "UART2", "USB", "SPI"]
 
 
+#: u-blox dynamic platform models (CFG-NAV5 dynModel)
+GPS_DYNAMIC_MODELS: dict[str, int] = {
+    "portable": 0,
+    "stationary": 2,
+    "pedestrian": 3,
+    "automotive": 4,
+    "sea": 5,
+    "airborne1g": 6,
+    "airborne2g": 7,
+    "airborne4g": 8,
+    "wrist": 9,
+}
+
+
 @dataclass(frozen=True, kw_only=True)
 class GPSConfig:
     SERIAL_PORT: str
     PORTS: list[GPSPort]
+    #: name of the dynamic platform model, a key of GPS_DYNAMIC_MODELS
+    DYNAMIC_MODEL: str
+    #: GNSS navigation rate in Hz
+    NAVIGATION_RATE_HZ: float
+
+
+@dataclass(frozen=True, kw_only=True)
+class FilterConfig:
+    #: use the Kalman filter for the boat velocity instead of averaging GPS samples
+    ENABLED: bool
+    #: typical acceleration of the boat in m/s²
+    ACCELERATION_SIGMA: float
+    #: time constant in seconds after which an acceleration has decayed to 1/e
+    ACCELERATION_TIME_CONSTANT: float
 
 
 def parse_bool(value: str) -> bool:
@@ -65,6 +93,7 @@ class Config:
     NETWORK: NetworkConfig
     MQTT: MQTTConfig | None
     GPS: GPSConfig
+    FILTER: FilterConfig
 
     def __new__(cls) -> "Config":
         if cls._instance is None:
@@ -126,6 +155,13 @@ class Config:
                 return mapping[level]
             logger.warning("%s is not a valid log level. Defaulting to WARNING.", level)
             return logging.WARNING
+
+        def parse_dynamic_model(model: str) -> str:
+            normalized = model.strip().lower()
+            if normalized in GPS_DYNAMIC_MODELS:
+                return normalized
+            logger.warning("%s is not a valid dynamic model. Defaulting to sea.", model)
+            return "sea"
 
         self.SENSOR = SensorConfig(
             COMPASS_OFFSET_DEGREES=get(
@@ -197,6 +233,25 @@ class Config:
                 )
                 if port in ports
             ],
+            DYNAMIC_MODEL=get(
+                config,
+                "GPS",
+                "DYNAMIC_MODEL",
+                parse_dynamic_model,
+                "sea",
+            ),
+            NAVIGATION_RATE_HZ=get(config, "GPS", "NAVIGATION_RATE_HZ", float, 2.0),
+        )
+        self.FILTER = FilterConfig(
+            ENABLED=get(config, "FILTER", "ENABLED", parse_bool, True),
+            ACCELERATION_SIGMA=get(config, "FILTER", "ACCELERATION_SIGMA", float, 0.3),
+            ACCELERATION_TIME_CONSTANT=get(
+                config,
+                "FILTER",
+                "ACCELERATION_TIME_CONSTANT",
+                float,
+                2.0,
+            ),
         )
 
     def __repr__(self) -> str:
