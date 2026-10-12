@@ -55,6 +55,7 @@ ignore = [
     "S101", # allow asserts in tests
     "PLR2004", # Magic value used in comparison
     "D", # Don't care about docstrings in tests
+    "S311", # pseudo-random numbers are fine for simulated test data
 ]
 "src/ubx/*.py" = [
     "B009", # allow using getattr without a default
@@ -74,7 +75,7 @@ typeCheckingMode = "standard"
 skips = ['*/test_*.py']
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = [".", "src"]
 addopts = [
     "--import-mode=importlib",
 ]
