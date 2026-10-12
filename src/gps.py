@@ -18,7 +18,7 @@ from ubx.nav_dgps import parse_ubx_nav_dgps_message
 from ubx.nav_dop import parse_ubx_nav_dop_message
 from ubx.nav_pvt import UbxNavPvt, parse_ubx_nav_pvt_message
 from ubx.shared_types import GnssFixType
-from utils.vector import Vector2D
+from utils.vector import PolarCoordinates, Vector2D
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +255,20 @@ def log_position_info(last_position: PositionData, position: PositionData) -> No
         )
 
 
+def velocity_over_ground(message: UbxNavPvt | UbxHnrPvt) -> Vector2D:
+    """Return the velocity over ground in m/s, x is north and y is east."""
+    if isinstance(message, UbxNavPvt):
+        return Vector2D(x=message.vel_n / 1000, y=message.vel_e / 1000)
+
+    # HNR-PVT only reports ground speed and heading of motion
+    return Vector2D.from_polar(
+        PolarCoordinates(
+            angle=math.radians(message.heading_of_motion),
+            magnitude=message.ground_speed / 1000,
+        ),
+    )
+
+
 def worker(
     message_queue: Queue[pyubx2.UBXMessage],
     output_queues: list[Queue[PositionData]],
@@ -277,6 +291,8 @@ def worker(
 
     def submit_position_data(message: UbxNavPvt | UbxHnrPvt) -> None:
         nonlocal last_position
+
+        velocity = velocity_over_ground(message)
 
         position = PositionData(
             timestamp=(
@@ -313,6 +329,11 @@ def worker(
             number_satellites_used=number_of_satellites_used,
             positional_dilution_of_precision=positional_dilution_of_precision,
             horizontal_dilution_of_precision=horizontal_dilution_of_precision,
+            velocity_north=velocity.x,
+            velocity_east=velocity.y,
+            speed_accuracy=message.speed_accuracy / 1000,
+            horizontal_accuracy=message.horizontal_accuracy / 1000,
+            source="NAV-PVT" if isinstance(message, UbxNavPvt) else "HNR-PVT",
         )
 
         if last_position is not None:
