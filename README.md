@@ -29,6 +29,44 @@ timestamp. The filtered velocity is logged to the `velocity` data stream.
 - On startup the receiver is set to `GPS.DYNAMIC_MODEL` (default `sea`) and
   `GPS.NAVIGATION_RATE_HZ` (default 2 Hz).
 
+## Local dashboard and hotspot
+
+The windbot serves its own dashboard (`src/dashboard`), so the wind can be watched
+on a phone without a trip through the internet, e.g. when there is no 4G.
+It is enabled with `NETWORK.ENABLE_LOCAL_WEBSERVER` and listens on
+`NETWORK.WEBSERVER_PORT` (80) on every interface.
+
+- **Wind** shows the same values and charts as the online dashboard, from one second
+  averages kept in memory for two hours. The settings are stored in the browser like
+  online.
+- **Live** shows the latest inputs for debugging: apparent wind, heading, GPS fix and
+  accuracy, the velocity filter (filtered vs. measured velocity, rejected measurements,
+  resets), MQTT, network interfaces and the Pi's load, temperature and memory.
+  Other modules can add a card by publishing values with `telemetry.update(...)`.
+- **Wi-Fi** shows the connection, lets you add, edit, forget and connect to networks,
+  and turn the hotspot on or off without a restart.
+
+When the Wi-Fi isn't connected to a known network, the windbot opens an access point
+(`NETWORK.AP_SSID` / `AP_PASSWORD`, by default `WindSensor`). Connect to it and open
+http://10.42.0.1 (or http://windbot.lan). The access point doesn't share the windbot's
+internet connection.
+
+- After startup it waits `AP_STARTUP_DELAY_SECONDS` (60) for a known network.
+- If the network drops, NetworkManager keeps trying to reconnect, and the access point
+  opens again after `AP_FALLBACK_DELAY_SECONDS` (180) without a connection.
+- *Turn off hotspot* closes the access point and joins the known network in reach with
+  the highest priority. If none connects, the access point opens again after the
+  fallback delay.
+- *Connect* on a known network switches to it. If that fails, the access point opens
+  again right away and the dashboard shows the error.
+- Set `NETWORK.ADMIN_PASSWORD` to require a password for Wi-Fi changes, e.g. when the
+  windbot joins a shared marina network.
+
+The Wi-Fi management uses NetworkManager (`nmcli`) and needs root, which the
+`windbot` service has. Prepare the Pi once with `sudo ./scripts/setup-hotspot.sh`
+(the post-first-boot script runs it): it installs `dnsmasq-base`, `iw` and `nftables`,
+adds the `windbot.lan` name and blocks forwarding from the access point.
+
 ## Bill of Materials
 TODO
 
@@ -66,6 +104,7 @@ After the script has run, insert the SD Card into the Raspberry Pi, power it on 
 - enable the canbus on system start
 - create and enable a systemd service to start the windbot code
 - copy `config.default.ini` to `config.ini` in `mobile-wind-sensor-client`
+- prepare the Wi-Fi hotspot for the local dashboard (`scripts/setup-hotspot.sh`)
 
 Lastly as a manual step, the values in the `config.ini` need to be set.
 
