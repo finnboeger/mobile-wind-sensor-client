@@ -109,6 +109,8 @@ class SensorReader:
             timestamp=int(time.time() * 1000),
             acceleration=self.imu_axes(acceleration),
             angular_rate=self.imu_axes(angular_rate),
+            # read one after another: the MMC5983MA's SET/RESET pulse draws a large
+            # current, so no other magnetometer may be measuring at the same time
             magnetic_fields=tuple(
                 axes(magnetometer.read())
                 for magnetometer, axes in zip(
