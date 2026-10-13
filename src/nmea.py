@@ -8,6 +8,7 @@ import log
 from structs import (
     ApparentWindData,
     HeadingData,
+    HeadingQueue,
     PositionQueue,
     WindData,
     WindOutputQueue,
@@ -16,11 +17,16 @@ from structs import (
 MAX_WIND_SPEED = 200  # m/s, values above this are considered invalid
 
 
-def init() -> tuple[n2k.Node, Queue[HeadingData], Queue[WindData]]:
+def init(
+    *,
+    read_heading: bool = True,
+) -> tuple[n2k.Node, Queue[HeadingData], Queue[WindData]]:
     """
     Initialize the NMEA2000 Node.
 
-    :return: _description_
+    :param read_heading: whether to read the heading from a compass on the network.
+        If False, the returned heading queue stays empty.
+    :return: the node, and the queues for the received heading and wind data
     """
     bus = can.Bus("can0", interface="socketcan")
 
@@ -37,7 +43,7 @@ def init() -> tuple[n2k.Node, Queue[HeadingData], Queue[WindData]]:
     node.set_product_information("Test", "0.0.1", "Dev", "00000000001", 5)
     node.set_configuration_information()
 
-    handler = Handler(node)
+    handler = Handler(node, read_heading=read_heading)
     node.attach_msg_handler(handler)
 
     # Create a notifier to handle incoming messages
@@ -53,8 +59,11 @@ class Handler(n2k.MessageHandler):
     def __init__(
         self,
         node: n2k.Node,
+        *,
+        read_heading: bool = True,
     ) -> None:
         super().__init__(0, node)
+        self.read_heading = read_heading
         self.heading_queue = Queue()
         self.wind_queue = Queue()
 
@@ -78,7 +87,7 @@ class Handler(n2k.MessageHandler):
             log.data("wind", wind_data)
             return
 
-        if msg.pgn == n2k.PGN.VesselHeading:
+        if msg.pgn == n2k.PGN.VesselHeading and self.read_heading:
             heading = n2k.messages.parse_n2k_heading(msg).heading
             if heading is None or heading > math.tau or heading < -math.tau:
                 # bad heading (radians)
@@ -147,6 +156,39 @@ def forward_position(
             ),
         )
         n2k_node.send_msg(message)
+
+
+def forward_heading(
+    n2k_node: n2k.Node,
+    queue: HeadingQueue,
+    *,
+    true_heading: bool,
+) -> None:
+    """
+    Send the heading from the local compass as Vessel Heading (PGN 127250).
+
+    :param n2k_node: NMEA2000 Node to send messages through.
+    :param queue: Input queue containing heading data.
+    :param true_heading: whether the heading is relative to true north (declination
+        or GNSS alignment applied) instead of magnetic north
+    """
+    reference = (
+        n2k.types.N2kHeadingReference.true
+        if true_heading
+        else n2k.types.N2kHeadingReference.magnetic
+    )
+    while True:
+        heading = queue.get()
+        n2k_node.send_msg(
+            n2k.messages.create_n2k_heading_message(
+                n2k.messages.Heading(
+                    heading=heading.heading,
+                    deviation=None,
+                    variation=None,
+                    ref=reference,
+                ),
+            ),
+        )
 
 
 wind_forwarding_buffer = []

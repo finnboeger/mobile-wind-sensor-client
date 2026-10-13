@@ -6,6 +6,8 @@ from typing import Literal, TypeVar
 
 logger = logging.getLogger(__name__)
 
+_T = TypeVar("_T")
+
 
 @dataclass(frozen=True, kw_only=True)
 class SensorConfig:
@@ -79,8 +81,76 @@ class FilterConfig:
     ACCELERATION_TIME_CONSTANT: float
 
 
+CompassSource = Literal["nmea2000", "magnetometer"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class CompassConfig:
+    #: where the heading comes from: an NMEA2000 compass or the local magnetometer
+    SOURCE: CompassSource
+    #: magnetometer chips, keys of compass.drivers.MAGNETOMETERS. With more than one,
+    #: they are calibrated separately and cross-checked against each other.
+    MAGNETOMETERS: list[str]
+    #: I²C address of each magnetometer, None for the chip's default
+    MAGNETOMETER_ADDRESSES: list[int | None]
+    #: IMU chip, a key of compass.drivers.IMUS
+    IMU: str
+    #: I²C address of the IMU, None for the chip's default
+    IMU_ADDRESS: int | None
+    #: number of the I²C bus, /dev/i2c-<n>
+    I2C_BUS: int
+    #: sensor axes pointing forward, starboard and down, e.g. "x,-y,-z", one entry
+    #: per magnetometer
+    MAGNETOMETER_AXES: list[str]
+    IMU_AXES: str
+    #: rate in Hz the sensors are read at
+    SAMPLE_RATE_HZ: float
+    #: rate in Hz the heading is passed on at
+    OUTPUT_RATE_HZ: float
+    #: file with the bench calibration written by calibrate_compass.py. "{sensor}" is
+    #: replaced by the magnetometer's name.
+    BENCH_CALIBRATION_FILE: str
+    #: file the continuous calibration is stored in
+    CALIBRATION_FILE: str
+    #: learn the boat's iron while underway
+    CONTINUOUS_CALIBRATION: bool
+    #: learn the heading offset from the course over ground
+    GNSS_ALIGNMENT: bool
+    #: magnetic declination in degrees, positive east
+    DECLINATION_DEGREES: float
+    #: send the heading to the NMEA2000 network (PGN 127250)
+    SEND_HEADING: bool
+
+
 def parse_bool(value: str) -> bool:
     return configparser.ConfigParser.BOOLEAN_STATES.get(value.lower(), False)
+
+
+def parse_compass_source(source: str) -> CompassSource:
+    normalized = source.strip().lower()
+    if normalized == "magnetometer":
+        return "magnetometer"
+    if normalized != "nmea2000":
+        logger.warning(
+            "%s is not a valid compass source. Defaulting to nmea2000.",
+            source,
+        )
+    return "nmea2000"
+
+
+def parse_addresses(addresses: str) -> list[int | None]:
+    """Parse comma separated I²C addresses, "default" or empty for the default."""
+    return [
+        None if entry.strip().lower() in ("", "default") else int(entry, 0)
+        for entry in addresses.split(",")
+    ]
+
+
+def per_magnetometer(values: list[_T], count: int, fallback: _T) -> list[_T]:
+    """Repeat a single value for every magnetometer and pad missing ones."""
+    if len(values) == 1:
+        return values * count
+    return [values[i] if i < len(values) else fallback for i in range(count)]
 
 
 class Config:
@@ -94,6 +164,7 @@ class Config:
     MQTT: MQTTConfig | None
     GPS: GPSConfig
     FILTER: FilterConfig
+    COMPASS: CompassConfig
 
     def __new__(cls) -> "Config":
         if cls._instance is None:
@@ -252,6 +323,91 @@ class Config:
                 float,
                 2.0,
             ),
+        )
+
+        magnetometers = [
+            name.strip().lower()
+            for name in get(
+                config,
+                "COMPASS",
+                "MAGNETOMETER",
+                str,
+                "mmc5983ma",
+            ).split(",")
+            if name.strip() != ""
+        ]
+        self.COMPASS = CompassConfig(
+            SOURCE=get(
+                config,
+                "COMPASS",
+                "SOURCE",
+                parse_compass_source,
+                "nmea2000",
+            ),
+            MAGNETOMETERS=magnetometers,
+            MAGNETOMETER_ADDRESSES=per_magnetometer(
+                get(
+                    config,
+                    "COMPASS",
+                    "MAGNETOMETER_ADDRESS",
+                    parse_addresses,
+                    [None],
+                ),
+                len(magnetometers),
+                None,
+            ),
+            IMU=get(config, "COMPASS", "IMU", str, "ism330dhcx").strip().lower(),
+            IMU_ADDRESS=(
+                get(config, "COMPASS", "IMU_ADDRESS", parse_addresses, [None])[0]
+            ),
+            I2C_BUS=get(config, "COMPASS", "I2C_BUS", int, 1),
+            MAGNETOMETER_AXES=per_magnetometer(
+                [
+                    axes.strip()
+                    for axes in get(
+                        config,
+                        "COMPASS",
+                        "MAGNETOMETER_AXES",
+                        str,
+                        "x,-y,-z",
+                    ).split(";")
+                ],
+                len(magnetometers),
+                "x,-y,-z",
+            ),
+            IMU_AXES=get(config, "COMPASS", "IMU_AXES", str, "x,-y,-z"),
+            SAMPLE_RATE_HZ=get(config, "COMPASS", "SAMPLE_RATE_HZ", float, 50.0),
+            OUTPUT_RATE_HZ=get(config, "COMPASS", "OUTPUT_RATE_HZ", float, 10.0),
+            BENCH_CALIBRATION_FILE=get(
+                config,
+                "COMPASS",
+                "BENCH_CALIBRATION_FILE",
+                str,
+                "compass_bench_{sensor}.json",
+            ),
+            CALIBRATION_FILE=get(
+                config,
+                "COMPASS",
+                "CALIBRATION_FILE",
+                str,
+                "compass_calibration.json",
+            ),
+            CONTINUOUS_CALIBRATION=get(
+                config,
+                "COMPASS",
+                "CONTINUOUS_CALIBRATION",
+                parse_bool,
+                True,
+            ),
+            GNSS_ALIGNMENT=get(config, "COMPASS", "GNSS_ALIGNMENT", parse_bool, True),
+            DECLINATION_DEGREES=get(
+                config,
+                "COMPASS",
+                "DECLINATION_DEGREES",
+                float,
+                0.0,
+            ),
+            SEND_HEADING=get(config, "COMPASS", "SEND_HEADING", parse_bool, True),
         )
 
     def __repr__(self) -> str:

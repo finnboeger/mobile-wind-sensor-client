@@ -29,6 +29,45 @@ timestamp. The filtered velocity is logged to the `velocity` data stream.
 - On startup the receiver is set to `GPS.DYNAMIC_MODEL` (default `sea`) and
   `GPS.NAVIGATION_RATE_HZ` (default 2 Hz).
 
+## Compass
+
+With `COMPASS.SOURCE = magnetometer` the heading comes from one or two magnetometers
+(RM3100 and/or MMC5983MA) and an ISM330DHCX accelerometer/gyro on I²C instead of an
+NMEA2000 compass. `src/compass/` contains the drivers and the processing:
+
+- **Tilt compensation:** roll and pitch come from the gyro, slowly corrected by the
+  accelerometer, so waves and turns don't tilt the heading. The GNSS speed is used to
+  remove the centripetal acceleration in turns.
+- **Heading filter:** the gyro carries the heading through turns and short magnetic
+  disturbances, the magnetometer corrects it and the gyro bias.
+- **Continuous calibration:** the boat's own iron (engine, battery, fittings) is learned
+  from the turns the boat makes anyway. Once enough headings have been seen (about a
+  third of a circle for the hard iron, almost a full circle for soft iron), a fit runs
+  every 30 seconds. Nothing has to be turned by hand. One slow circle after installing
+  speeds up the first fit. The result is stored in `COMPASS.CALIBRATION_FILE`.
+- **Two magnetometers:** each has its own bench and continuous calibration. Their
+  headings are averaged. If they differ by more than 8°, e.g. because a current flows
+  near one of them, only the one that agrees with the gyro is used, and a lasting
+  disagreement is logged.
+- **GNSS alignment:** on straight runs above 3 m/s the offset between the compass and
+  the course over ground is learned per heading sector, so currents average out. It
+  absorbs the declination and the mounting angle of the sensor.
+
+Setup:
+
+1. Set `MAGNETOMETER_AXES` and `IMU_AXES` for how the boards are mounted. Check that
+   the heading increases when the bow turns to starboard, and that the `heading` data
+   log roughly matches a hand bearing compass.
+2. Bench calibration, once per finished unit before mounting it: run
+   `python src/calibrate_compass.py --live 90` and turn the closed unit slowly in every
+   direction. This removes the iron that travels with the sensor. Without it the
+   continuous calibration still works, but needs larger turns to converge.
+3. Mount it and drive. The log says when the calibration and alignment are ready.
+
+The raw sensor readings are logged to the `compass_raw` data stream, so
+`calibrate_compass.py` can also be run on a recording. Currents near the sensor (LTE
+modem, wiring for lights) can't be calibrated out, so keep them away or twisted.
+
 ## Bill of Materials
 TODO
 

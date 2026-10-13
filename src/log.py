@@ -18,6 +18,7 @@ DataConsumer = Literal[
     "position",
     "velocity",
     "heading",
+    "compass_raw",
     "wind",
     "true_wind",
 ]
