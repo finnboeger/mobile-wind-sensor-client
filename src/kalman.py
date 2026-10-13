@@ -119,6 +119,13 @@ class VelocityKalmanFilter:
         self._time: int | None = None
         self._consecutive_rejections = 0
 
+        #: statistics for the dashboard
+        self.accepted_count = 0
+        self.rejected_count = 0
+        self.reset_count = 0
+        #: timestamp of the last measurement in milliseconds
+        self.last_measurement_time: int | None = None
+
     @property
     def initialized(self) -> bool:
         return self._time is not None
@@ -158,9 +165,11 @@ class VelocityKalmanFilter:
         :return: whether the measurement was accepted
         """
         variance = max(sigma, self.min_measurement_sigma) ** 2
+        self.last_measurement_time = timestamp
 
         if self._north is None or self._east is None or self._time is None:
             self._initialize(timestamp, velocity, variance)
+            self.accepted_count += 1
             return True
 
         # Measurements arriving out of order are applied at the current state time
@@ -182,12 +191,14 @@ class VelocityKalmanFilter:
         )
         if normalized_squared > 2 * self.gate_sigma**2:
             self._consecutive_rejections += 1
+            self.rejected_count += 1
             if self._consecutive_rejections >= MAX_CONSECUTIVE_REJECTIONS:
                 logger.info(
                     "Velocity filter rejected %d measurements in a row, resetting",
                     self._consecutive_rejections,
                 )
                 self._initialize(timestamp, velocity, variance)
+                self.reset_count += 1
                 return True
             logger.debug(
                 "Rejected velocity measurement, innovation %.2f m/s north, "
@@ -200,6 +211,7 @@ class VelocityKalmanFilter:
         self._consecutive_rejections = 0
         self._north.update(residual_north, variance_north)
         self._east.update(residual_east, variance_east)
+        self.accepted_count += 1
         return True
 
     def velocity_at(self, timestamp: int) -> Vector2D | None:
@@ -223,6 +235,12 @@ class VelocityKalmanFilter:
             x=self._north.velocity_after(dt, self.acceleration_time_constant),
             y=self._east.velocity_after(dt, self.acceleration_time_constant),
         )
+
+    def acceleration(self) -> Vector2D | None:
+        """Return the estimated acceleration, x is north and y is east, in m/s²."""
+        if self._north is None or self._east is None:
+            return None
+        return Vector2D(x=self._north.acceleration, y=self._east.acceleration)
 
     def velocity_sigma(self) -> float | None:
         """Return the standard deviation of the current velocity estimate in m/s."""
