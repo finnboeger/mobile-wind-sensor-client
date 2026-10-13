@@ -76,8 +76,8 @@ class CompassSample:
     acceleration: tuple[float, float, float]
     #: angular rate in rad/s
     angular_rate: tuple[float, float, float]
-    #: magnetic field in µT, before calibration
-    magnetic_field: tuple[float, float, float]
+    #: magnetic field of each magnetometer in µT, before calibration
+    magnetic_fields: tuple[tuple[float, float, float], ...]
 
 
 @dataclass(frozen=True, kw_only=True)

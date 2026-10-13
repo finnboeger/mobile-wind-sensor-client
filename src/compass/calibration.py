@@ -123,6 +123,11 @@ class BenchCalibration:
         write_json_atomically(path, self.to_dict())
 
 
+def bench_calibration_file(pattern: str, name: str) -> str:
+    """Return the bench calibration file of one magnetometer."""
+    return pattern.replace("{sensor}", name)
+
+
 @dataclass(frozen=True, kw_only=True)
 class BenchFitResult:
     calibration: BenchCalibration

@@ -17,7 +17,11 @@ from queue import Queue
 from smbus2 import SMBus
 
 import log
-from compass.calibration import BenchCalibration, write_json_atomically
+from compass.calibration import (
+    BenchCalibration,
+    bench_calibration_file,
+    write_json_atomically,
+)
 from compass.drivers import IMUS, MAGNETOMETERS, parse_axes
 from compass.processor import CompassOutput, CompassProcessor, CompassSettings
 from config import CompassConfig, Config
@@ -39,7 +43,12 @@ def create_processor(compass_config: CompassConfig) -> CompassProcessor:
             continuous_calibration=compass_config.CONTINUOUS_CALIBRATION,
             gnss_alignment=compass_config.GNSS_ALIGNMENT,
         ),
-        bench_calibration=BenchCalibration.load(compass_config.BENCH_CALIBRATION_FILE),
+        magnetometers={
+            name: BenchCalibration.load(
+                bench_calibration_file(compass_config.BENCH_CALIBRATION_FILE, name),
+            )
+            for name in compass_config.MAGNETOMETERS
+        },
     )
     path = compass_config.CALIBRATION_FILE
     if Path(path).exists():
@@ -63,34 +72,51 @@ class SensorReader:
     """Reads the magnetometer and IMU and maps them to the body frame."""
 
     def __init__(self, compass_config: CompassConfig) -> None:
-        if compass_config.MAGNETOMETER not in MAGNETOMETERS:
-            msg = f"Unknown magnetometer {compass_config.MAGNETOMETER}"
-            raise ValueError(msg)
+        for name in compass_config.MAGNETOMETERS:
+            if name not in MAGNETOMETERS:
+                msg = f"Unknown magnetometer {name}"
+                raise ValueError(msg)
         if compass_config.IMU not in IMUS:
             msg = f"Unknown IMU {compass_config.IMU}"
             raise ValueError(msg)
         self.bus = SMBus(compass_config.I2C_BUS)
-        magnetometer_type = MAGNETOMETERS[compass_config.MAGNETOMETER]
-        self.magnetometer = magnetometer_type(
-            self.bus,
-            compass_config.MAGNETOMETER_ADDRESS or magnetometer_type.DEFAULT_ADDRESS,
-        )
+        self.magnetometers = []
+        for name, address in zip(
+            compass_config.MAGNETOMETERS,
+            compass_config.MAGNETOMETER_ADDRESSES,
+            strict=True,
+        ):
+            magnetometer_type = MAGNETOMETERS[name]
+            self.magnetometers.append(
+                magnetometer_type(
+                    self.bus,
+                    address or magnetometer_type.DEFAULT_ADDRESS,
+                ),
+            )
         imu_type = IMUS[compass_config.IMU]
         self.imu = imu_type(
             self.bus,
             compass_config.IMU_ADDRESS or imu_type.DEFAULT_ADDRESS,
         )
-        self.magnetometer_axes = parse_axes(compass_config.MAGNETOMETER_AXES)
+        self.magnetometer_axes = [
+            parse_axes(axes) for axes in compass_config.MAGNETOMETER_AXES
+        ]
         self.imu_axes = parse_axes(compass_config.IMU_AXES)
 
     def read(self) -> CompassSample:
         acceleration, angular_rate = self.imu.read()
-        magnetic_field = self.magnetometer.read()
         return CompassSample(
             timestamp=int(time.time() * 1000),
             acceleration=self.imu_axes(acceleration),
             angular_rate=self.imu_axes(angular_rate),
-            magnetic_field=self.magnetometer_axes(magnetic_field),
+            magnetic_fields=tuple(
+                axes(magnetometer.read())
+                for magnetometer, axes in zip(
+                    self.magnetometers,
+                    self.magnetometer_axes,
+                    strict=True,
+                )
+            ),
         )
 
     def close(self) -> None:

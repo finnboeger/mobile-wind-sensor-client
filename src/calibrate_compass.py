@@ -12,7 +12,9 @@ Usage:
 - ``python src/calibrate_compass.py --live 90`` reads the sensors for 90 seconds
 - ``python src/calibrate_compass.py data_logs/<run>/compass_raw.log`` uses a recording
 
-The result is written to ``COMPASS.BENCH_CALIBRATION_FILE`` (or ``--output``).
+All configured magnetometers are calibrated from the same rotation. Each result is
+written to ``COMPASS.BENCH_CALIBRATION_FILE`` (or ``--output``) with ``{sensor}``
+replaced by the magnetometer's name.
 Changing ``COMPASS.MAGNETOMETER_AXES`` afterwards invalidates it.
 """
 
@@ -24,7 +26,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from compass.calibration import fit_ellipsoid
+from compass.calibration import bench_calibration_file, fit_ellipsoid
 from config import Config
 from log import DATA_SEPARATOR
 from utils.linalg import Vector3
@@ -40,8 +42,16 @@ def _unwrap(value: Any) -> Any:  # noqa: ANN401
     return value
 
 
-def read_log(paths: list[Path]) -> list[Vector3]:
-    samples: list[Vector3] = []
+def _vector(value: Any) -> Vector3 | None:  # noqa: ANN401
+    value = _unwrap(value)
+    if isinstance(value, list) and len(value) == 3:  # noqa: PLR2004
+        return (float(value[0]), float(value[1]), float(value[2]))
+    return None
+
+
+def read_log(paths: list[Path], count: int) -> list[list[Vector3]]:
+    """Return the samples of each of ``count`` magnetometers from recordings."""
+    samples: list[list[Vector3]] = [[] for _ in range(count)]
     for path in paths:
         with path.open(encoding="utf-8") as file:
             for line in file:
@@ -52,23 +62,30 @@ def read_log(paths: list[Path]) -> list[Vector3]:
                     data = json.loads(payload)
                 except json.JSONDecodeError:
                     continue
-                field = _unwrap(data.get("magnetic_field"))
-                if isinstance(field, list) and len(field) == 3:  # noqa: PLR2004
-                    samples.append((float(field[0]), float(field[1]), float(field[2])))
+                fields = _unwrap(data.get("magnetic_fields"))
+                if not isinstance(fields, list):
+                    # recorded before more than one magnetometer was supported
+                    fields = [data.get("magnetic_field")]
+                for index, field in enumerate(fields[:count]):
+                    vector = _vector(field)
+                    if vector is not None:
+                        samples[index].append(vector)
     return samples
 
 
-def read_live(seconds: float) -> list[Vector3]:
+def read_live(seconds: float, count: int) -> list[list[Vector3]]:
+    """Read all magnetometers for the given time."""
     from compass.worker import SensorReader
 
     reader = SensorReader(Config().COMPASS)
-    samples: list[Vector3] = []
+    samples: list[list[Vector3]] = [[] for _ in range(count)]
     end = time.monotonic() + seconds
     try:
         while time.monotonic() < end:
-            samples.append(reader.read().magnetic_field)
+            for index, field in enumerate(reader.read().magnetic_fields):
+                samples[index].append(field)
             remaining = end - time.monotonic()
-            sys.stdout.write(f"\r{len(samples)} samples, {remaining:4.0f} s left ")
+            sys.stdout.write(f"\r{len(samples[0])} samples, {remaining:4.0f} s left ")
             sys.stdout.flush()
             time.sleep(1 / LIVE_RATE)
     finally:
@@ -102,40 +119,58 @@ def coverage(samples: list[Vector3], center: Vector3) -> float:
     return len(seen) / len(directions)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Bench calibration of the magnetometer.",
-    )
-    parser.add_argument("logs", nargs="*", type=Path, help="compass_raw log files")
-    parser.add_argument("--live", type=float, help="read the sensors for N seconds")
-    parser.add_argument("--output", type=Path, help="where to write the calibration")
-    args = parser.parse_args()
-
-    if args.live:
-        samples = read_live(args.live)
-    elif args.logs:
-        samples = read_log(args.logs)
-    else:
-        parser.error("give either log files or --live SECONDS")
-
+def calibrate(name: str, samples: list[Vector3], output: str) -> bool:
+    """Fit and save the bench calibration of one magnetometer."""
     result = fit_ellipsoid(samples)
     if result is None:
-        sys.exit(f"Calibration failed with {len(samples)} samples. Turn it more.")
+        sys.stdout.write(
+            f"{name}: calibration failed with {len(samples)} samples. Turn it more.\n",
+        )
+        return False
 
     calibration = result.calibration
     covered = coverage(samples, calibration.offset)
     sys.stdout.write(
-        f"{len(samples)} samples, {covered:.0%} of directions covered\n"
-        f"offset {', '.join(f'{x:.2f}' for x in calibration.offset)} µT\n"
-        f"field strength {calibration.field_strength:.2f} µT, "
+        f"{name}: {len(samples)} samples, {covered:.0%} of directions covered\n"
+        f"  offset {', '.join(f'{x:.2f}' for x in calibration.offset)} µT\n"
+        f"  field strength {calibration.field_strength:.2f} µT, "
         f"residual {result.residual:.2f} µT\n",
     )
     if covered < 0.75:  # noqa: PLR2004
-        sys.stdout.write("Warning: turn the unit in more directions and repeat.\n")
-
-    output = args.output or Config().COMPASS.BENCH_CALIBRATION_FILE
+        sys.stdout.write("  Warning: turn the unit in more directions and repeat.\n")
     calibration.save(output)
-    sys.stdout.write(f"Written to {output}\n")
+    sys.stdout.write(f"  Written to {output}\n")
+    return True
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Bench calibration of the magnetometers.",
+    )
+    parser.add_argument("logs", nargs="*", type=Path, help="compass_raw log files")
+    parser.add_argument("--live", type=float, help="read the sensors for N seconds")
+    parser.add_argument(
+        "--output",
+        help='where to write the calibration, "{sensor}" is replaced by the name',
+    )
+    args = parser.parse_args()
+
+    compass_config = Config().COMPASS
+    names = compass_config.MAGNETOMETERS
+    if args.live:
+        samples = read_live(args.live, len(names))
+    elif args.logs:
+        samples = read_log(args.logs, len(names))
+    else:
+        parser.error("give either log files or --live SECONDS")
+
+    pattern = args.output or compass_config.BENCH_CALIBRATION_FILE
+    results = [
+        calibrate(name, sensor_samples, bench_calibration_file(pattern, name))
+        for name, sensor_samples in zip(names, samples, strict=True)
+    ]
+    if not all(results):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

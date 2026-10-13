@@ -1,6 +1,7 @@
 import json
 import math
 import random
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -215,11 +216,12 @@ def test_heading_filter_rejects_short_disturbance() -> None:
 # Simulated RIB
 
 
-def _simulate(  # noqa: PLR0913
+def _simulate(  # noqa: PLR0913, PLR0915
     *,
     continuous_calibration: bool = True,
     gnss_alignment: bool = True,
-    hard_iron: tuple[float, float, float] = (6.0, -4.0, 2.0),
+    hard_irons: tuple[tuple[float, float, float], ...] = ((6.0, -4.0, 2.0),),
+    disturbance: Callable[[int, float], tuple[float, float, float]] | None = None,
     soft_iron: tuple[tuple[float, float, float], ...] = (
         (1.04, 0.02, 0.0),
         (0.02, 0.97, 0.0),
@@ -233,8 +235,9 @@ def _simulate(  # noqa: PLR0913
 
     The boat goes straight on a number of headings at 8 m/s with turns at 15°/s in
     between, rolls and pitches in a short sea, and drifts in a current. The
-    magnetometer sees hard and soft iron the processor doesn't know about, and the
-    gyro has a bias.
+    magnetometers see hard and soft iron the processor doesn't know about, and the
+    gyro has a bias. There is one magnetometer per entry of ``hard_irons``, and
+    ``disturbance(sensor, t)`` adds a field that comes and goes, e.g. from a current.
     """
     rng = random.Random(seed)
     processor = CompassProcessor(
@@ -242,6 +245,9 @@ def _simulate(  # noqa: PLR0913
             continuous_calibration=continuous_calibration,
             gnss_alignment=gnss_alignment,
         ),
+        magnetometers={
+            f"sensor{i}": BenchCalibration() for i in range(len(hard_irons))
+        },
     )
     rate_hz = 50
     dt = 1 / rate_hz
@@ -323,18 +329,25 @@ def _simulate(  # noqa: PLR0913
 
             true_field = _body_field(roll, pitch, heading, declination)
             distorted = mat_vec([list(row) for row in soft_iron], list(true_field))
-            magnetic_field = (
-                distorted[0] + hard_iron[0] + rng.gauss(0, 0.05),
-                distorted[1] + hard_iron[1] + rng.gauss(0, 0.05),
-                distorted[2] + hard_iron[2] + rng.gauss(0, 0.05),
-            )
+            magnetic_fields = []
+            for sensor, hard_iron in enumerate(hard_irons):
+                extra = (
+                    (0.0, 0.0, 0.0) if disturbance is None else disturbance(sensor, t)
+                )
+                magnetic_fields.append(
+                    (
+                        distorted[0] + hard_iron[0] + extra[0] + rng.gauss(0, 0.05),
+                        distorted[1] + hard_iron[1] + extra[1] + rng.gauss(0, 0.05),
+                        distorted[2] + hard_iron[2] + extra[2] + rng.gauss(0, 0.05),
+                    ),
+                )
 
             output = processor.process(
                 CompassSample(
                     timestamp=timestamp,
                     acceleration=acceleration,
                     angular_rate=gyro,
-                    magnetic_field=magnetic_field,
+                    magnetic_fields=tuple(magnetic_fields),
                 ),
             )
 
@@ -371,7 +384,7 @@ def _rms(values: list[float]) -> float:
 
 def test_rib_converges_without_manual_calibration() -> None:
     processor, errors = _simulate()
-    assert processor.calibration.converged
+    assert processor.calibrated
     assert processor.alignment.offset is not None
     last_two_minutes = errors[-6000:]
     assert _rms(last_two_minutes) < 2
@@ -388,7 +401,50 @@ def test_calibration_state_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "compass.json"
     path.write_text(json.dumps(processor.state_dict()), encoding="utf-8")
 
-    restored = CompassProcessor(bench_calibration=BenchCalibration())
+    restored = CompassProcessor(magnetometers={"sensor0": BenchCalibration()})
     restored.load_state_dict(json.loads(path.read_text(encoding="utf-8")))
-    assert restored.calibration.calibration == processor.calibration.calibration
+    assert (
+        restored.channels[0].calibration.calibration
+        == processor.channels[0].calibration.calibration
+    )
     assert restored.alignment.offset == processor.alignment.offset
+
+
+def _current_near_sensor(sensor: int, t: float) -> tuple[float, float, float]:
+    """A current near sensor 1 adds 6 µT sideways for 30 s, near the end."""
+    if sensor == 1 and 500 <= t < 530:
+        return (0.0, 6.0, 0.0)
+    return (0.0, 0.0, 0.0)
+
+
+def test_second_magnetometer_catches_local_disturbance() -> None:
+    hard_irons = ((6.0, -4.0, 2.0), (-3.0, 5.0, -1.0))
+    processor, errors = _simulate(
+        hard_irons=hard_irons,
+        disturbance=_current_near_sensor,
+    )
+    assert all(channel.calibration.converged for channel in processor.channels)
+    last_two_minutes = errors[-6000:]
+    assert _rms(last_two_minutes) < 2
+    assert max(abs(e) for e in last_two_minutes) < 4
+
+    # with only the disturbed sensor the heading is pulled off by about 20°
+    _, single_errors = _simulate(
+        hard_irons=hard_irons[1:],
+        disturbance=lambda _, t: _current_near_sensor(1, t),
+    )
+    assert max(abs(e) for e in single_errors[-6000:]) > 10
+
+
+def test_single_magnetometer_state_is_migrated() -> None:
+    processor, _ = _simulate()
+    state = processor.state_dict()
+    old_state = {
+        "version": 1,
+        "field_strength": state["magnetometers"][0]["field_strength"],
+        "calibration": state["magnetometers"][0]["calibration"],
+        "alignment": state["alignment"],
+    }
+    restored = CompassProcessor(magnetometers={"rm3100": BenchCalibration()})
+    restored.load_state_dict(old_state)
+    assert restored.channels[0].calibration.converged

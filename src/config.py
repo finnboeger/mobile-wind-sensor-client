@@ -6,6 +6,8 @@ from typing import Literal, TypeVar
 
 logger = logging.getLogger(__name__)
 
+_T = TypeVar("_T")
+
 
 @dataclass(frozen=True, kw_only=True)
 class SensorConfig:
@@ -86,24 +88,27 @@ CompassSource = Literal["nmea2000", "magnetometer"]
 class CompassConfig:
     #: where the heading comes from: an NMEA2000 compass or the local magnetometer
     SOURCE: CompassSource
-    #: magnetometer chip, a key of compass.drivers.MAGNETOMETERS
-    MAGNETOMETER: str
-    #: I²C address of the magnetometer, None for the chip's default
-    MAGNETOMETER_ADDRESS: int | None
+    #: magnetometer chips, keys of compass.drivers.MAGNETOMETERS. With more than one,
+    #: they are calibrated separately and cross-checked against each other.
+    MAGNETOMETERS: list[str]
+    #: I²C address of each magnetometer, None for the chip's default
+    MAGNETOMETER_ADDRESSES: list[int | None]
     #: IMU chip, a key of compass.drivers.IMUS
     IMU: str
     #: I²C address of the IMU, None for the chip's default
     IMU_ADDRESS: int | None
     #: number of the I²C bus, /dev/i2c-<n>
     I2C_BUS: int
-    #: sensor axes pointing forward, starboard and down, e.g. "x,-y,-z"
-    MAGNETOMETER_AXES: str
+    #: sensor axes pointing forward, starboard and down, e.g. "x,-y,-z", one entry
+    #: per magnetometer
+    MAGNETOMETER_AXES: list[str]
     IMU_AXES: str
     #: rate in Hz the sensors are read at
     SAMPLE_RATE_HZ: float
     #: rate in Hz the heading is passed on at
     OUTPUT_RATE_HZ: float
-    #: file with the bench calibration written by calibrate_compass.py
+    #: file with the bench calibration written by calibrate_compass.py. "{sensor}" is
+    #: replaced by the magnetometer's name.
     BENCH_CALIBRATION_FILE: str
     #: file the continuous calibration is stored in
     CALIBRATION_FILE: str
@@ -133,8 +138,19 @@ def parse_compass_source(source: str) -> CompassSource:
     return "nmea2000"
 
 
-def parse_address(address: str) -> int:
-    return int(address, 0)
+def parse_addresses(addresses: str) -> list[int | None]:
+    """Parse comma separated I²C addresses, "default" or empty for the default."""
+    return [
+        None if entry.strip().lower() in ("", "default") else int(entry, 0)
+        for entry in addresses.split(",")
+    ]
+
+
+def per_magnetometer(values: list[_T], count: int, fallback: _T) -> list[_T]:
+    """Repeat a single value for every magnetometer and pad missing ones."""
+    if len(values) == 1:
+        return values * count
+    return [values[i] if i < len(values) else fallback for i in range(count)]
 
 
 class Config:
@@ -309,6 +325,17 @@ class Config:
             ),
         )
 
+        magnetometers = [
+            name.strip().lower()
+            for name in get(
+                config,
+                "COMPASS",
+                "MAGNETOMETER",
+                str,
+                "mmc5983ma",
+            ).split(",")
+            if name.strip() != ""
+        ]
         self.COMPASS = CompassConfig(
             SOURCE=get(
                 config,
@@ -317,23 +344,35 @@ class Config:
                 parse_compass_source,
                 "nmea2000",
             ),
-            MAGNETOMETER=get(config, "COMPASS", "MAGNETOMETER", str, "mmc5983ma")
-            .strip()
-            .lower(),
-            MAGNETOMETER_ADDRESS=get_optional(
-                config,
-                "COMPASS",
-                "MAGNETOMETER_ADDRESS",
-                parse_address,
+            MAGNETOMETERS=magnetometers,
+            MAGNETOMETER_ADDRESSES=per_magnetometer(
+                get(
+                    config,
+                    "COMPASS",
+                    "MAGNETOMETER_ADDRESS",
+                    parse_addresses,
+                    [None],
+                ),
+                len(magnetometers),
+                None,
             ),
             IMU=get(config, "COMPASS", "IMU", str, "ism330dhcx").strip().lower(),
-            IMU_ADDRESS=get_optional(config, "COMPASS", "IMU_ADDRESS", parse_address),
+            IMU_ADDRESS=(
+                get(config, "COMPASS", "IMU_ADDRESS", parse_addresses, [None])[0]
+            ),
             I2C_BUS=get(config, "COMPASS", "I2C_BUS", int, 1),
-            MAGNETOMETER_AXES=get(
-                config,
-                "COMPASS",
-                "MAGNETOMETER_AXES",
-                str,
+            MAGNETOMETER_AXES=per_magnetometer(
+                [
+                    axes.strip()
+                    for axes in get(
+                        config,
+                        "COMPASS",
+                        "MAGNETOMETER_AXES",
+                        str,
+                        "x,-y,-z",
+                    ).split(";")
+                ],
+                len(magnetometers),
                 "x,-y,-z",
             ),
             IMU_AXES=get(config, "COMPASS", "IMU_AXES", str, "x,-y,-z"),
@@ -344,7 +383,7 @@ class Config:
                 "COMPASS",
                 "BENCH_CALIBRATION_FILE",
                 str,
-                "compass_bench.json",
+                "compass_bench_{sensor}.json",
             ),
             CALIBRATION_FILE=get(
                 config,

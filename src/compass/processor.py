@@ -45,6 +45,70 @@ _MAX_HEADING_TIME_OFFSET_MS = 250
 _STRAIGHT_FOR_MS = 3000
 #: samples taken while turning faster than this are not used for calibration
 _MAX_CALIBRATION_RATE = math.radians(45)
+#: two magnetometers further apart than this disagree, only the one closer to the
+#: gyro's prediction is used
+_MAX_SENSOR_DISAGREEMENT = math.radians(8)
+#: warn when the magnetometers have disagreed for this long, in milliseconds
+_DISAGREEMENT_WARNING_MS = 60_000
+
+
+class MagnetometerChannel:
+    """Calibration and plausibility check of one magnetometer."""
+
+    def __init__(self, name: str, bench_calibration: BenchCalibration) -> None:
+        self.name = name
+        self.bench_calibration = bench_calibration
+        self.calibration = ContinuousCalibration()
+        #: expected strength of the earth's field after calibration in µT
+        self.field_strength: float | None = bench_calibration.field_strength
+        self._field_rejected_since: int | None = None
+
+    def field_ok(self, timestamp: int, magnitude: float, dt: float) -> bool:
+        """Check the field strength, e.g. to ignore samples while a current flows."""
+        if self.field_strength is None:
+            self.field_strength = magnitude
+            return True
+        if (
+            abs(magnitude - self.field_strength)
+            > _FIELD_TOLERANCE * self.field_strength
+        ):
+            if self._field_rejected_since is None:
+                self._field_rejected_since = timestamp
+            elif timestamp - self._field_rejected_since > _FIELD_RESET_AFTER_MS:
+                logger.warning(
+                    "Magnetic field strength at %s changed from %.1f µT to %.1f µT",
+                    self.name,
+                    self.field_strength,
+                    magnitude,
+                )
+                self.field_strength = magnitude
+                self._field_rejected_since = None
+            return False
+        self._field_rejected_since = None
+        self.field_strength += min(1.0, dt / _FIELD_TIME_CONSTANT) * (
+            magnitude - self.field_strength
+        )
+        return True
+
+    def heading(self, field_body: Vector3, attitude: Attitude) -> float:
+        horizontal = self.calibration.calibration
+        level_x, level_y, _ = level(horizontal.remove_offset(field_body), attitude)
+        corrected_x, corrected_y = horizontal.apply_soft_iron(level_x, level_y)
+        return heading_from_level_field(corrected_x, corrected_y)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "field_strength": self.field_strength,
+            "calibration": self.calibration.state_dict(),
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        field_strength = state.get("field_strength")
+        if field_strength is not None:
+            self.field_strength = float(field_strength)
+        if "calibration" in state:
+            self.calibration.load_state_dict(state["calibration"])
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -88,21 +152,29 @@ class CompassProcessor:
         self,
         *,
         settings: CompassSettings | None = None,
-        bench_calibration: BenchCalibration | None = None,
+        magnetometers: dict[str, BenchCalibration] | None = None,
     ) -> None:
+        """
+        Create a processor.
+
+        :param settings: settings, or None for the defaults
+        :param magnetometers: name and bench calibration of each magnetometer, in the
+            order of :py:attr:`structs.CompassSample.magnetic_fields`
+        """
         self.settings = settings or CompassSettings()
-        self.bench_calibration = bench_calibration or BenchCalibration()
+        if not magnetometers:
+            magnetometers = {"magnetometer": BenchCalibration()}
+        self.channels = [
+            MagnetometerChannel(name, bench) for name, bench in magnetometers.items()
+        ]
         self.attitude_filter = AttitudeFilter()
         self.heading_filter = HeadingFilter()
-        self.calibration = ContinuousCalibration()
         self.alignment = GnssAlignment()
+        self._disagreeing_since: int | None = None
 
         self._last_time: int | None = None
         self._last_fit_time: int | None = None
         self._last_turn_time: int | None = None
-        self._field_rejected_since: int | None = None
-        #: expected strength of the earth's field after calibration in µT
-        self.field_strength: float | None = self.bench_calibration.field_strength
         #: (timestamp, heading before the GNSS alignment)
         self._headings: deque[tuple[int, float]] = deque()
 
@@ -141,7 +213,7 @@ class CompassProcessor:
     def _align(self, position: PositionData) -> None:
         # differences collected before the calibration has converged would stay in
         # the alignment for a long time
-        if self.settings.continuous_calibration and not self.calibration.converged:
+        if self.settings.continuous_calibration and not self.calibrated:
             return
         if position.speed < self.settings.min_alignment_speed:
             return
@@ -186,47 +258,57 @@ class CompassProcessor:
         # centripetal acceleration in a turn points to the inside of the turn
         return (self._along_track_acceleration, self._speed * yaw_rate, 0.0)
 
-    def _field_ok(self, timestamp: int, magnitude: float, dt: float) -> bool:
-        if self.field_strength is None:
-            self.field_strength = magnitude
-            return True
-        if (
-            abs(magnitude - self.field_strength)
-            > _FIELD_TOLERANCE * self.field_strength
-        ):
-            if self._field_rejected_since is None:
-                self._field_rejected_since = timestamp
-            elif timestamp - self._field_rejected_since > _FIELD_RESET_AFTER_MS:
-                logger.warning(
-                    "Magnetic field strength changed from %.1f µT to %.1f µT",
-                    self.field_strength,
-                    magnitude,
-                )
-                self.field_strength = magnitude
-                self._field_rejected_since = None
-            return False
-        self._field_rejected_since = None
-        self.field_strength += min(1.0, dt / _FIELD_TIME_CONSTANT) * (
-            magnitude - self.field_strength
-        )
-        return True
+    @property
+    def calibrated(self) -> bool:
+        """Whether the continuous calibration of any magnetometer has converged."""
+        return any(channel.calibration.converged for channel in self.channels)
 
-    def _update_heading(
+    def _magnetic_heading(
         self,
         timestamp: int,
-        field_body: Vector3,
-        attitude: Attitude,
-    ) -> None:
-        horizontal = self.calibration.calibration
-        level_x, level_y, _ = level(horizontal.remove_offset(field_body), attitude)
-        corrected_x, corrected_y = horizontal.apply_soft_iron(level_x, level_y)
-        self.heading_filter.update(
-            timestamp,
-            heading_from_level_field(corrected_x, corrected_y),
-        )
+        headings: list[tuple[MagnetometerChannel, float]],
+    ) -> float | None:
+        """
+        Combine the headings of the magnetometers that passed the field check.
+
+        Uncalibrated magnetometers are ignored once another one is calibrated. If two
+        disagree, the one closer to the gyro's prediction is used, which catches a
+        disturbance close to one of them, e.g. a current on the board.
+        """
+        if any(channel.calibration.converged for channel, _ in headings):
+            headings = [h for h in headings if h[0].calibration.converged]
+        if len(headings) == 0:
+            return None
+        values = [heading for _, heading in headings]
+        spread = max(abs(wrap_angle(value - values[0])) for value in values)
+        predicted = self.heading_filter.heading
+        if spread <= _MAX_SENSOR_DISAGREEMENT or predicted is None:
+            self._disagreeing_since = None
+            return (
+                math.atan2(
+                    sum(math.sin(v) for v in values),
+                    sum(math.cos(v) for v in values),
+                )
+                % math.tau
+            )
+
+        if self._disagreeing_since is None:
+            self._disagreeing_since = timestamp
+        elif timestamp - self._disagreeing_since > _DISAGREEMENT_WARNING_MS:
+            logger.warning(
+                "Magnetometers have disagreed by up to %.1f° for a minute: %s",
+                math.degrees(spread),
+                ", ".join(
+                    f"{channel.name} {math.degrees(heading):.1f}°"
+                    for channel, heading in headings
+                ),
+            )
+            self._disagreeing_since = timestamp
+        return min(values, key=lambda value: abs(wrap_angle(value - predicted)))
 
     def _collect_calibration_sample(
         self,
+        channel: MagnetometerChannel,
         field_body: Vector3,
         attitude: Attitude,
     ) -> None:
@@ -238,7 +320,7 @@ class CompassProcessor:
             and abs(self.heading_filter.rate) < _MAX_CALIBRATION_RATE
         ):
             uncorrected_x, uncorrected_y, _ = level(field_body, attitude)
-            self.calibration.add_sample(uncorrected_x, uncorrected_y)
+            channel.calibration.add_sample(uncorrected_x, uncorrected_y)
 
     def _refit_if_due(self, timestamp: int) -> None:
         if self._last_fit_time is None:
@@ -246,7 +328,8 @@ class CompassProcessor:
         elif timestamp - self._last_fit_time >= self.settings.refit_interval_ms:
             self._last_fit_time = timestamp
             if self.settings.continuous_calibration:
-                self.calibration.refit()
+                for channel in self.channels:
+                    channel.calibration.refit()
 
     def process(self, sample: CompassSample) -> CompassOutput | None:
         """
@@ -279,10 +362,15 @@ class CompassProcessor:
         ):
             self._last_turn_time = timestamp
 
-        field_body = self.bench_calibration.apply(sample.magnetic_field)
-        if self._field_ok(timestamp, norm(field_body), dt):
-            self._update_heading(timestamp, field_body, attitude)
-            self._collect_calibration_sample(field_body, attitude)
+        headings: list[tuple[MagnetometerChannel, float]] = []
+        for channel, raw in zip(self.channels, sample.magnetic_fields, strict=False):
+            field_body = channel.bench_calibration.apply(raw)
+            if channel.field_ok(timestamp, norm(field_body), dt):
+                headings.append((channel, channel.heading(field_body, attitude)))
+                self._collect_calibration_sample(channel, field_body, attitude)
+        magnetic_heading = self._magnetic_heading(timestamp, headings)
+        if magnetic_heading is not None:
+            self.heading_filter.update(timestamp, magnetic_heading)
         self._refit_if_due(timestamp)
 
         magnetic_heading = self.heading_filter.heading
@@ -301,7 +389,7 @@ class CompassProcessor:
             magnetic_heading=magnetic_heading,
             roll=attitude.roll,
             pitch=attitude.pitch,
-            calibrated=self.calibration.converged,
+            calibrated=self.calibrated,
             aligned=alignment is not None,
         )
 
@@ -310,25 +398,35 @@ class CompassProcessor:
 
     def state_dict(self) -> dict[str, Any]:
         return {
-            "version": 1,
-            "field_strength": self.field_strength,
+            "version": 2,
             "attitude": self.attitude_filter.state_dict(),
             "heading_gyro_bias": self.heading_filter.bias,
-            "calibration": self.calibration.state_dict(),
+            "magnetometers": [channel.state_dict() for channel in self.channels],
             "alignment": self.alignment.state_dict(),
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
-        if state.get("version") != 1:
+        version = state.get("version")
+        if version == 1:
+            # a single magnetometer, stored before more than one was supported
+            magnetometers = [
+                {
+                    "name": self.channels[0].name,
+                    "field_strength": state.get("field_strength"),
+                    "calibration": state.get("calibration", {}),
+                },
+            ]
+        elif version == 2:  # noqa: PLR2004
+            magnetometers = state.get("magnetometers", [])
+        else:
             logger.warning("Unknown compass calibration version, ignoring it")
             return
-        field_strength = state.get("field_strength")
-        if field_strength is not None:
-            self.field_strength = float(field_strength)
         self.attitude_filter.load_state_dict(state.get("attitude", {}))
         self.heading_filter.bias = float(state.get("heading_gyro_bias", 0.0))
-        if "calibration" in state:
-            self.calibration.load_state_dict(state["calibration"])
+        stored = {entry.get("name"): entry for entry in magnetometers}
+        for channel in self.channels:
+            if channel.name in stored:
+                channel.load_state_dict(stored[channel.name])
         if "alignment" in state:
             self.alignment.load_state_dict(state["alignment"])
 

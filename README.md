@@ -31,9 +31,9 @@ timestamp. The filtered velocity is logged to the `velocity` data stream.
 
 ## Compass
 
-With `COMPASS.SOURCE = magnetometer` the heading comes from a magnetometer (MMC5983MA
-or RM3100) and an ISM330DHCX accelerometer/gyro on I²C instead of an NMEA2000 compass.
-`src/compass/` contains the drivers and the processing:
+With `COMPASS.SOURCE = magnetometer` the heading comes from one or two magnetometers
+(RM3100 and/or MMC5983MA) and an ISM330DHCX accelerometer/gyro on I²C instead of an
+NMEA2000 compass. `src/compass/` contains the drivers and the processing:
 
 - **Tilt compensation:** roll and pitch come from the gyro, slowly corrected by the
   accelerometer, so waves and turns don't tilt the heading. The GNSS speed is used to
@@ -45,6 +45,10 @@ or RM3100) and an ISM330DHCX accelerometer/gyro on I²C instead of an NMEA2000 c
   third of a circle for the hard iron, almost a full circle for soft iron), a fit runs
   every 30 seconds. Nothing has to be turned by hand. One slow circle after installing
   speeds up the first fit. The result is stored in `COMPASS.CALIBRATION_FILE`.
+- **Two magnetometers:** each has its own bench and continuous calibration. Their
+  headings are averaged. If they differ by more than 8°, e.g. because a current flows
+  near one of them, only the one that agrees with the gyro is used, and a lasting
+  disagreement is logged.
 - **GNSS alignment:** on straight runs above 3 m/s the offset between the compass and
   the course over ground is learned per heading sector, so currents average out. It
   absorbs the declination and the mounting angle of the sensor.
