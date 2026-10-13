@@ -408,6 +408,11 @@ if [[ -f /home/pi/mobile-wind-sensor-client/config.default.ini ]] && [[ ! -f /ho
 	chown pi:pi /home/pi/mobile-wind-sensor-client/config.ini
 fi
 
+# Prepare the Wi-Fi hotspot that serves the local dashboard without a network
+if [[ -x /home/pi/mobile-wind-sensor-client/scripts/setup-hotspot.sh ]]; then
+	/home/pi/mobile-wind-sensor-client/scripts/setup-hotspot.sh
+fi
+
 EOF
 chmod 755 "$SDCARD/home/pi/windbot-post-firstboot.sh"
 chown 1000:1000 "$SDCARD/home/pi/windbot-post-firstboot.sh"

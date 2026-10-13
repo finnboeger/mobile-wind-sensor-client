@@ -7,6 +7,7 @@ import n2k
 
 import config
 import log
+import telemetry
 from kalman import VelocityKalmanFilter
 from structs import (
     ApparentWindData,
@@ -111,6 +112,69 @@ def movement_at(
     return velocity
 
 
+def publish_filter_status(
+    velocity_filter: VelocityKalmanFilter | None,
+    timestamp: int,
+    velocity: Vector2D | None,
+    measured_velocity: Vector2D | None,
+) -> None:
+    """Publish the state of the velocity filter for the local dashboard."""
+    if velocity_filter is None:
+        telemetry.update("filter", enabled=False)
+        return
+
+    def to_dict(vector: Vector2D | None) -> dict[str, float] | None:
+        if vector is None:
+            return None
+        polar = vector.to_polar()
+        return {
+            "north": vector.x,
+            "east": vector.y,
+            "speed": polar.magnitude,
+            "course": math.degrees(polar.angle),
+        }
+
+    acceleration = velocity_filter.acceleration()
+    last_measurement = velocity_filter.last_measurement_time
+    telemetry.update(
+        "filter",
+        enabled=True,
+        initialized=velocity_filter.initialized,
+        velocity=to_dict(velocity),
+        measured_velocity=to_dict(measured_velocity),
+        acceleration=to_dict(acceleration),
+        velocity_sigma=velocity_filter.velocity_sigma(),
+        accepted=velocity_filter.accepted_count,
+        rejected=velocity_filter.rejected_count,
+        resets=velocity_filter.reset_count,
+        measurement_age_ms=(
+            timestamp - last_measurement if last_measurement is not None else None
+        ),
+        acceleration_sigma=velocity_filter.acceleration_sigma,
+        acceleration_time_constant=velocity_filter.acceleration_time_constant,
+    )
+
+
+def publish_inputs(
+    apparent_wind: ApparentWindData,
+    heading: HeadingData | None,
+) -> None:
+    """Publish the latest apparent wind and heading for the local dashboard."""
+    telemetry.update(
+        "apparent_wind",
+        speed=apparent_wind.wind_speed,
+        angle=math.degrees(apparent_wind.wind_angle) % 360,
+        timestamp=apparent_wind.timestamp,
+    )
+    if heading is not None:
+        telemetry.update(
+            "heading",
+            heading=math.degrees(heading.heading),
+            compass_offset=math.degrees(COMPASS_OFFSET),
+            timestamp=heading.timestamp,
+        )
+
+
 class WindBuffer:
     def __init__(self, max_age: int) -> None:
         self.buffer: list[tuple[Vector2D, int]] = []
@@ -153,6 +217,7 @@ def worker(
     consumers: list[WindOutputQueue],
 ) -> None:
     current_movement_vector: Vector2D | None = None
+    latest_measured_velocity: Vector2D | None = None
     latest_position_time: int | None = None
     current_heading: HeadingData | None = None
     # store the wind vectors of the last few seconds to compute an average
@@ -196,6 +261,16 @@ def worker(
         )
         if new_movement_vector is not None:
             current_movement_vector = new_movement_vector
+        latest_measured_velocity = (
+            movement_buffer[-1] if movement_buffer else latest_measured_velocity
+        )
+        publish_filter_status(
+            velocity_filter,
+            current_apparent_wind.timestamp,
+            current_movement_vector,
+            latest_measured_velocity,
+        )
+        publish_inputs(current_apparent_wind, current_heading)
 
         # assert that both position and compass data are not None
         if (
@@ -203,6 +278,18 @@ def worker(
             or latest_position_time is None
             or current_heading is None
         ):
+            telemetry.update(
+                "true_wind",
+                waiting_for=[
+                    name
+                    for name, value in (
+                        ("position", latest_position_time),
+                        ("velocity", current_movement_vector),
+                        ("heading", current_heading),
+                    )
+                    if value is None
+                ],
+            )
             continue
 
         # assert that both position and compass data are up to date
@@ -222,6 +309,7 @@ def worker(
                 current_heading.timestamp,
                 current_apparent_wind.timestamp,
             )
+            telemetry.increment("true_wind", "skipped_stale")
             continue
 
         current_apparent_wind_vector = Vector2D.from_polar(
@@ -255,6 +343,16 @@ def worker(
         )
 
         log.data("true_wind", average_true_wind)
+        current_true_wind_polar = current_true_wind_vector.to_polar()
+        telemetry.update(
+            "true_wind",
+            waiting_for=[],
+            speed=current_true_wind_polar.magnitude,
+            direction=math.degrees(current_true_wind_polar.angle),
+            average_speed=average_true_wind.wind_speed,
+            average_direction=math.degrees(average_true_wind.wind_angle),
+            timestamp=current_apparent_wind.timestamp,
+        )
 
         if logger.getEffectiveLevel() <= logging.DEBUG:
             logger.debug(
