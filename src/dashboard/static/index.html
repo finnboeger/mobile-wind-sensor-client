@@ -1,0 +1,1026 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Windbot</title>
+<style>
+:root {
+  --bg: #f4f5fb;
+  --card: #ffffff;
+  --text: #2d3142;
+  --muted: #6b6f80;
+  --line: #e2e4ee;
+  --accent: #667eea;
+  --accent2: #764ba2;
+  --good: #2f855a;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+}
+header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px; background: var(--card); box-shadow: var(--shadow);
+  position: sticky; top: 0; z-index: 10;
+}
+header h1 { font-size: 1.2rem; margin-right: auto; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); margin-right: 6px; }
+.dot.ok { background: var(--good); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+nav { display: flex; gap: 4px; }
+nav button, .btn {
+  border: 1px solid var(--line); background: var(--card); color: var(--text);
+  border-radius: 8px; padding: 8px 14px; font-size: 0.95rem; cursor: pointer;
+}
+nav button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.icon-btn { border: none; background: none; font-size: 1.6rem; cursor: pointer; line-height: 1; color: var(--text); }
+main { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.banner { padding: 12px 16px; border-radius: 8px; font-weight: 600; }
+.banner.warn { background: rgba(255, 165, 0, 0.18); color: #8a4b00; }
+.banner.bad { background: rgba(220, 38, 38, 0.18); color: #991b1b; }
+.banner.info { background: rgba(102, 126, 234, 0.14); color: #3c4ba8; }
+.kpi-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.card { background: var(--card); border-radius: 12px; box-shadow: var(--shadow); padding: 16px; }
+.kpi .label { font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; margin-bottom: 6px; }
+.kpi .value { font-size: 1.8rem; font-weight: 700; }
+.kpi-cards.stale-warn .value { color: var(--warn); }
+.kpi-cards.stale-bad .value { color: var(--bad); }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.left-column { display: flex; flex-direction: column; gap: 16px; }
+.chart { position: relative; height: 420px; padding: 8px; }
+.chart canvas { width: 100%; height: 100%; display: block; touch-action: pan-y; }
+#direction-chart { height: 100%; min-height: 560px; }
+.tooltip {
+  position: absolute; pointer-events: none; background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 0.8rem;
+  box-shadow: var(--shadow); white-space: nowrap; display: none; z-index: 5;
+}
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; align-items: start; }
+.card h2 { font-size: 1rem; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.card h2 .age { margin-left: auto; font-size: 0.75rem; font-weight: 400; color: var(--muted); }
+.card h2 .age.warn { color: var(--warn); } .card h2 .age.bad { color: var(--bad); }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.9rem; }
+dt { color: var(--muted); }
+dd { font-variant-numeric: tabular-nums; text-align: right; }
+.muted { color: var(--muted); }
+.wifi-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+td.actions { text-align: right; }
+td.actions .btn { margin: 2px 0; }
+td.actions .btn { padding: 4px 10px; font-size: 0.85rem; }
+.badge { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 10px; background: var(--line); color: var(--text); margin-left: 6px; }
+.badge.good { background: rgba(47, 133, 90, 0.15); color: var(--good); }
+form .row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+form .row.inline { flex-direction: row; align-items: center; gap: 8px; }
+input[type=text], input[type=password], input[type=number], select {
+  padding: 8px 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 1rem; width: 100%;
+}
+.scan-list { list-style: none; max-height: 260px; overflow-y: auto; }
+.scan-list li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.scan-list li:hover { background: var(--bg); }
+.settings-overlay {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 100;
+  display: none; align-items: center; justify-content: center; padding: 16px;
+}
+.settings-overlay.open { display: flex; }
+.settings-panel { background: #fff; border-radius: 14px; padding: 20px 24px; width: 100%; max-width: 440px; max-height: 90vh; overflow-y: auto; }
+.settings-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.settings-row label { font-size: 0.95rem; }
+.settings-row select, .settings-row input[type=number] { width: 140px; }
+.hidden { display: none !important; }
+@media (max-width: 600px) {
+  header h1 { width: 100%; }
+  .kpi .value { font-size: 1.4rem; }
+  .chart { height: 320px; }
+  #direction-chart { min-height: 460px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="conn-dot" class="dot"></span>Windbot</h1>
+  <nav>
+    <button data-tab="wind" class="active">Wind</button>
+    <button data-tab="live">Live</button>
+    <button data-tab="wifi">Wi-Fi</button>
+  </nav>
+  <button class="icon-btn" id="settings-btn" aria-label="Open settings">⚙</button>
+</header>
+
+<main>
+  <div id="banner" class="banner hidden"></div>
+
+  <section id="tab-wind">
+    <div id="no-data" class="banner info hidden">Waiting for wind data. The Live tab shows what the windbot is waiting for.</div>
+    <div class="charts">
+      <div class="left-column">
+        <div class="kpi-cards" id="kpis">
+          <div class="card kpi"><div class="label">True Wind Speed</div><div class="value" id="kpi-tws">—</div></div>
+          <div class="card kpi"><div class="label">True Wind Direction</div><div class="value" id="kpi-twd">—</div></div>
+          <div class="card kpi"><div class="label" id="kpi-avg-tws-label">Avg True Wind Speed</div><div class="value" id="kpi-avg-tws">—</div></div>
+          <div class="card kpi"><div class="label" id="kpi-avg-twd-label">Avg True Wind Direction</div><div class="value" id="kpi-avg-twd">—</div></div>
+        </div>
+        <div class="card chart" id="speed-chart"><canvas></canvas><div class="tooltip"></div></div>
+      </div>
+      <div class="card chart" id="direction-chart"><canvas></canvas><div class="tooltip"></div></div>
+    </div>
+  </section>
+
+  <section id="tab-live" class="hidden">
+    <div class="grid" id="live-cards"></div>
+  </section>
+
+  <section id="tab-wifi" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <h2>Wi-Fi</h2>
+        <div id="wifi-status" class="muted">Loading…</div>
+        <div id="wifi-activity"></div>
+        <div class="wifi-actions">
+          <button class="btn" id="hotspot-stop">Turn off hotspot and join a known network</button>
+          <button class="btn" id="hotspot-start">Open hotspot now</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Known networks</h2>
+        <table>
+          <thead><tr><th>Network</th><th>Priority</th><th></th></tr></thead>
+          <tbody id="networks"></tbody>
+        </table>
+        <p class="muted" style="margin-top:8px;font-size:0.85rem">The windbot joins the known network in reach with the highest priority.</p>
+      </div>
+      <div class="card">
+        <h2 id="network-form-title">Add network</h2>
+        <form id="network-form" autocomplete="off">
+          <input type="hidden" id="nf-uuid">
+          <div class="row"><label for="nf-ssid">Network name (SSID)</label><input type="text" id="nf-ssid" list="scan-ssids" required maxlength="32"></div>
+          <datalist id="scan-ssids"></datalist>
+          <div class="row"><label for="nf-password">Password</label><input type="password" id="nf-password" maxlength="63" placeholder=""></div>
+          <div class="row inline"><input type="checkbox" id="nf-open"><label for="nf-open">Open network without password</label></div>
+          <div class="row"><label for="nf-priority">Priority (higher is preferred)</label><input type="number" id="nf-priority" value="0" step="1"></div>
+          <div class="row inline"><input type="checkbox" id="nf-autoconnect" checked><label for="nf-autoconnect">Join automatically</label></div>
+          <div class="row inline"><input type="checkbox" id="nf-hidden"><label for="nf-hidden">Hidden network</label></div>
+          <div class="wifi-actions">
+            <button class="btn primary" type="submit">Save</button>
+            <button class="btn hidden" type="button" id="nf-cancel">Cancel</button>
+          </div>
+        </form>
+      </div>
+      <div class="card">
+        <h2>Networks in reach <button class="btn" id="scan-btn" style="margin-left:auto;padding:4px 10px">Scan</button></h2>
+        <ul class="scan-list" id="scan-list"><li class="muted">Press Scan to look for networks.</li></ul>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="settings-overlay" id="settings">
+  <div class="settings-panel">
+    <div class="settings-header"><h2>Settings</h2><button class="icon-btn" id="settings-close" aria-label="Close settings">✕</button></div>
+    <div class="settings-row"><label for="s-timeframe">Time frame</label><select id="s-timeframe"></select></div>
+    <div class="settings-row"><label for="s-unit">Wind speed unit</label>
+      <select id="s-unit"><option value="mps">m/s</option><option value="knots">Knots (kn)</option><option value="kmh">km/h</option></select></div>
+    <div class="settings-row"><label for="s-oldest">Oldest at top</label><input type="checkbox" id="s-oldest"></div>
+    <div class="settings-row"><label for="s-exclusion">Exclusion window</label><select id="s-exclusion"></select></div>
+    <div class="settings-row"><label for="s-hide">Hide invalid data</label><input type="checkbox" id="s-hide"></div>
+    <div class="settings-row"><label for="s-accel">Accel threshold (m/s²)</label><input type="number" id="s-accel" min="0" step="0.05"></div>
+    <div class="settings-row"><label for="s-heading">Heading rate threshold (°/s)</label><input type="number" id="s-heading" min="0" step="0.5"></div>
+    <div class="settings-row"><label for="s-sensor" id="s-sensor-label">Sensor speed threshold</label><input type="number" id="s-sensor" min="0" step="0.1"></div>
+    <div class="settings-row"><label for="s-avg">Average window</label><select id="s-avg"></select></div>
+    <div class="settings-row"><label for="s-minwidth">Min chart width (deg)</label><input type="number" id="s-minwidth" min="10" max="360"></div>
+    <div class="settings-row"><label for="s-maxspan">Max display span</label><select id="s-maxspan"></select></div>
+    <div class="settings-row"><label for="s-smoothing">Chart smoothing</label><select id="s-smoothing"></select></div>
+    <div style="display:flex;justify-content:flex-end"><button class="btn primary" id="settings-apply">Apply</button></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+// ───────────────────────────────────────────── settings (same as the online dashboard)
+const STORAGE_KEY = "windDashboardSettings";
+const DEFAULT_SETTINGS = {
+  timeFrameMinutes: 30,
+  windSpeedUnit: "knots",
+  sensorSpeedThresholdMps: 15 / 1.943844,
+  directionOldestAtTop: false,
+  exclusionWindowSec: 5,
+  hideInvalidData: false,
+  accelThresholdMs2: 0.3,
+  headingRateThresholdDegs: 10,
+  avgWindowMinutes: 10,
+  minChartWidthDeg: 45,
+  maxDisplaySpanDeg: 360,
+  smoothingWindowSec: 30,
+};
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (e) { /* ignore */ }
+  return { ...DEFAULT_SETTINGS };
+}
+let settings = loadSettings();
+
+const UNIT_FACTOR = { mps: 1, knots: 1.943844, kmh: 3.6 };
+const UNIT_LABEL = { mps: "m/s", knots: "kn", kmh: "km/h" };
+const toUnit = (mps, unit = settings.windSpeedUnit) => mps * UNIT_FACTOR[unit];
+const unitLabel = () => UNIT_LABEL[settings.windSpeedUnit];
+const fmtSpeed = (mps) => (mps == null || !isFinite(mps) ? "—" : `${toUnit(mps).toFixed(1)} ${unitLabel()}`);
+const fmtDir = (deg) => (deg == null || !isFinite(deg) ? "—" : `${((deg % 360) + 360) % 360 | 0}°`);
+const fmtNum = (v, digits = 1, suffix = "") => (v == null || !isFinite(v) ? "—" : `${Number(v).toFixed(digits)}${suffix}`);
+const $ = (id) => document.getElementById(id);
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (value != null && value !== false) node.setAttribute(key, value === true ? "" : value);
+  }
+  for (const child of children.flat(Infinity)) {
+    if (child == null) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+// ───────────────────────────────────────────── API
+let adminPassword = sessionStorage.getItem("windbotAdminPassword") || "";
+let clockOffsetMs = 0; // windbot clock minus this device's clock
+const serverNow = () => Date.now() + clockOffsetMs;
+
+async function api(path, body) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const options = body === undefined ? {} : {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Admin-Password": adminPassword },
+      body: JSON.stringify(body),
+    };
+    const res = await fetch(path, options);
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 && attempt === 0) {
+      const password = prompt("Admin password of the windbot");
+      if (password == null) throw new Error("An admin password is needed for this.");
+      adminPassword = password;
+      sessionStorage.setItem("windbotAdminPassword", password);
+      continue;
+    }
+    if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+    return data;
+  }
+}
+
+// ───────────────────────────────────────────── tabs
+let activeTab = "wind";
+for (const button of document.querySelectorAll("nav button")) {
+  button.addEventListener("click", () => {
+    activeTab = button.dataset.tab;
+    for (const b of document.querySelectorAll("nav button")) b.classList.toggle("active", b === button);
+    for (const tab of ["wind", "live", "wifi"]) $(`tab-${tab}`).classList.toggle("hidden", tab !== activeTab);
+    if (activeTab === "wind") renderWind();
+    if (activeTab === "live") pollStatus();
+    if (activeTab === "wifi") pollWifi();
+  });
+}
+
+// ───────────────────────────────────────────── measurements
+let measurements = []; // oldest first, records of /api/measurements
+let lastFetchOk = false;
+
+async function pollMeasurements() {
+  try {
+    const since = measurements.length ? measurements[measurements.length - 1].ts : "";
+    const data = await api(`/api/measurements?since=${since}`);
+    clockOffsetMs = data.server_time - Date.now();
+    if (data.items.length) {
+      measurements = measurements.concat(data.items);
+      trimMeasurements();
+      if (activeTab === "wind") renderWind();
+    }
+    lastFetchOk = true;
+  } catch (e) {
+    lastFetchOk = false;
+  }
+  updateBanner();
+}
+
+function trimMeasurements() {
+  if (!measurements.length) return;
+  const cutoff = measurements[measurements.length - 1].ts - settings.timeFrameMinutes * 60 * 1000;
+  const first = measurements.findIndex((m) => m.ts > cutoff);
+  if (first > 0) measurements = measurements.slice(first);
+}
+
+function latestAgeSec() {
+  const visible = filteredMeasurements();
+  if (!visible.length) return null;
+  return Math.max(0, Math.floor((serverNow() - visible[visible.length - 1].ts) / 1000));
+}
+
+function formatAge(sec) {
+  if (sec >= 3600) return `${Math.floor(sec / 3600)}h${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")}m`;
+  if (sec >= 60) return `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, "0")}s`;
+  return `${sec}s`;
+}
+
+function updateBanner() {
+  const banner = $("banner");
+  const dot = $("conn-dot");
+  let text = "";
+  let level = "";
+  const age = latestAgeSec();
+  if (!lastFetchOk) {
+    text = "No connection to the windbot.";
+    level = "bad";
+  } else if (age != null && age > 60) {
+    text = `Latest data is ${formatAge(age)} old.`;
+    level = age > 150 ? "bad" : "warn";
+  }
+  banner.textContent = text;
+  banner.className = `banner ${level}${text ? "" : " hidden"}`;
+  dot.className = `dot ${!lastFetchOk ? "bad" : age == null ? "" : age > 30 ? "warn" : "ok"}`;
+  $("kpis").className = `kpi-cards${age == null ? "" : age > 150 ? " stale-bad" : age > 30 ? " stale-warn" : ""}`;
+}
+
+// ───────────────────────────────────────────── wind computations (ported from the online dashboard)
+function filteredMeasurements() {
+  return measurements.filter((m) => m.sensor_speed_mps == null || m.sensor_speed_mps <= settings.sensorSpeedThresholdMps);
+}
+
+function averageDirection(directions) {
+  let sin = 0, cos = 0;
+  for (const d of directions) { sin += Math.sin((d * Math.PI) / 180); cos += Math.cos((d * Math.PI) / 180); }
+  return ((Math.atan2(sin, cos) * 180) / Math.PI + 360) % 360;
+}
+
+// Merged time ranges around strong accelerations and turns, where the true wind is unreliable.
+function computeUnreliableRanges(meas, windowMs) {
+  if (windowMs <= 0) return [];
+  const events = [];
+  for (let i = 0; i < meas.length - 1; i++) {
+    const a = meas[i], b = meas[i + 1];
+    const dtMs = Math.abs(a.ts - b.ts);
+    if (dtMs === 0) continue;
+    const dtS = dtMs / 1000;
+    const mid = (a.ts + b.ts) / 2;
+    if (a.sensor_speed_mps != null && b.sensor_speed_mps != null
+        && Math.abs(a.sensor_speed_mps - b.sensor_speed_mps) / dtS > settings.accelThresholdMs2) events.push(mid);
+    if (a.sensor_heading_deg != null && b.sensor_heading_deg != null) {
+      const avgSpeed = ((a.sensor_speed_mps ?? 0) + (b.sensor_speed_mps ?? 0)) / 2;
+      if (avgSpeed > 1) {
+        let dh = Math.abs(a.sensor_heading_deg - b.sensor_heading_deg);
+        if (dh > 180) dh = 360 - dh;
+        if (dh / dtS > settings.headingRateThresholdDegs) events.push(mid);
+      }
+    }
+  }
+  const merged = [];
+  for (const t of events.sort((x, y) => x - y)) {
+    const range = [t - windowMs, t + windowMs];
+    if (merged.length && range[0] <= merged[merged.length - 1][1]) merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], range[1]);
+    else merged.push(range);
+  }
+  return merged;
+}
+
+function isUnreliable(ranges, ts) {
+  for (const [start, end] of ranges) if (ts >= start && ts <= end) return true;
+  return false;
+}
+
+// Trailing rolling average over the current and the previous samples (data is oldest first).
+// Like the online dashboard, 4 samples are subtracted for the 5 s average applied on the windbot.
+function smooth(values, mean) {
+  const window = Math.max(1, settings.smoothingWindowSec - 4);
+  if (window <= 1) return values;
+  return values.map((_, i) => mean(values.slice(Math.max(0, i - window + 1), i + 1)));
+}
+
+// ───────────────────────────────────────────── charts
+const DATA_GAP_MS = 5000;
+const charts = {
+  speed: { box: $("speed-chart") },
+  direction: { box: $("direction-chart") },
+};
+let hoverTs = null;
+let windModel = null;
+
+function prepareCanvas(chart) {
+  const canvas = chart.box.querySelector("canvas");
+  const ratio = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth, height = canvas.clientHeight;
+  if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.font = "11px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  return { ctx, width, height, canvas };
+}
+
+function niceStep(range, count) {
+  const raw = range / count;
+  const power = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const f of [1, 2, 2.5, 5, 10]) if (raw <= f * power) return f * power;
+  return 10 * power;
+}
+
+const TIME_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].map((s) => s * 1000);
+function timeTicks(min, max, count) {
+  const step = TIME_STEPS.find((s) => (max - min) / s <= count) || TIME_STEPS[TIME_STEPS.length - 1];
+  const offset = new Date(min).getTimezoneOffset() * 60000;
+  const ticks = [];
+  for (let t = Math.ceil((min - offset) / step) * step + offset; t <= max; t += step) ticks.push(t);
+  return { ticks, withSeconds: step < 60000 };
+}
+const timeLabel = (t, withSeconds) =>
+  new Date(t).toLocaleTimeString([], withSeconds ? { hour: "2-digit", minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+
+// Draw a polyline from [x, y, dashed, ts] points, breaking at null entries and data gaps.
+function drawSeries(ctx, points, color, gapAxis) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.lineJoin = "round";
+  for (const dashed of [false, true]) {
+    ctx.setLineDash(dashed ? [6, 4] : []);
+    ctx.beginPath();
+    let previous = null;
+    let drawing = false; // continue the current path, so the dash pattern isn't restarted
+    for (const p of points) {
+      if (p == null) { previous = null; drawing = false; continue; }
+      const joins = previous && Math.abs(p[3] - previous[3]) <= DATA_GAP_MS;
+      // a segment is dashed if either end is unreliable
+      if (joins && (previous[2] || p[2]) === dashed) {
+        if (!drawing) ctx.moveTo(previous[0], previous[1]);
+        ctx.lineTo(p[0], p[1]);
+        drawing = true;
+      } else {
+        drawing = false;
+      }
+      previous = p;
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+}
+
+function drawSpeedChart() {
+  const chart = charts.speed;
+  const { ctx, width, height } = prepareCanvas(chart);
+  const m = windModel;
+  if (!m || !m.points.length) return;
+  const pad = { left: 44, right: 12, top: 22, bottom: 26 };
+  const plotW = width - pad.left - pad.right, plotH = height - pad.top - pad.bottom;
+  const tMin = m.points[0].ts, tMax = Math.max(m.points[m.points.length - 1].ts, tMin + 1000);
+  const speeds = m.points.filter((p) => !(settings.hideInvalidData && p.unreliable)).map((p) => p.speed);
+  const maxSpeed = Math.max(1, ...speeds) * 1.1;
+  const step = niceStep(maxSpeed, 5);
+  const yMax = Math.ceil(maxSpeed / step) * step;
+  const x = (t) => pad.left + ((t - tMin) / (tMax - tMin)) * plotW;
+  const y = (v) => pad.top + plotH - (v / yMax) * plotH;
+  chart.map = { x, tMin, tMax, pad, plotW, plotH, invertX: (px) => tMin + ((px - pad.left) / plotW) * (tMax - tMin) };
+
+  ctx.fillStyle = "#6b6f80";
+  ctx.strokeStyle = "#e2e4ee";
+  ctx.lineWidth = 1;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (let v = 0; v <= yMax + 1e-9; v += step) {
+    ctx.beginPath(); ctx.moveTo(pad.left, y(v)); ctx.lineTo(width - pad.right, y(v)); ctx.stroke();
+    ctx.fillText(String(+v.toFixed(2)), pad.left - 6, y(v));
+  }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText(`Speed (${unitLabel()})`, pad.left, 4);
+  const { ticks, withSeconds } = timeTicks(tMin, tMax, Math.max(2, Math.floor(plotW / 80)));
+  for (const t of ticks) {
+    const label = timeLabel(t, withSeconds);
+    const half = ctx.measureText(label).width / 2;
+    ctx.textAlign = "center";
+    ctx.fillText(label, Math.min(Math.max(x(t), half), width - half), height - pad.bottom + 8);
+  }
+
+  drawSeries(ctx, m.points.map((p) => (settings.hideInvalidData && p.unreliable ? null : [x(p.ts), y(p.speed), p.unreliable, p.ts])), "#764ba2");
+
+  if (hoverTs != null && hoverTs >= tMin && hoverTs <= tMax) {
+    ctx.strokeStyle = "#2f855a"; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(x(hoverTs), pad.top); ctx.lineTo(x(hoverTs), pad.top + plotH); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawDirectionChart() {
+  const chart = charts.direction;
+  const { ctx, width, height } = prepareCanvas(chart);
+  const m = windModel;
+  if (!m || !m.points.length) return;
+  const pad = { left: 70, right: 14, top: 40, bottom: 40 };
+  const plotW = width - pad.left - pad.right, plotH = height - pad.top - pad.bottom;
+  const tMin = m.points[0].ts, tMax = Math.max(m.points[m.points.length - 1].ts, tMin + 1000);
+  const { axisMin, axisMax, avg } = m.direction;
+  const x = (d) => pad.left + ((d - axisMin) / (axisMax - axisMin)) * plotW;
+  // newest at the top unless "oldest at top" is set
+  const y = (t) => settings.directionOldestAtTop
+    ? pad.top + ((t - tMin) / (tMax - tMin)) * plotH
+    : pad.top + plotH - ((t - tMin) / (tMax - tMin)) * plotH;
+  chart.map = {
+    invertY: (py) => {
+      const f = (py - pad.top) / plotH;
+      return settings.directionOldestAtTop ? tMin + f * (tMax - tMin) : tMax - f * (tMax - tMin);
+    },
+  };
+
+  ctx.strokeStyle = "#e2e4ee"; ctx.fillStyle = "#6b6f80"; ctx.lineWidth = 1;
+  const step = niceStep(axisMax - axisMin, Math.max(2, Math.floor(plotW / 60)));
+  ctx.textAlign = "center";
+  for (let d = Math.ceil(axisMin / step) * step; d <= axisMax + 1e-9; d += step) {
+    ctx.beginPath(); ctx.moveTo(x(d), pad.top); ctx.lineTo(x(d), pad.top + plotH); ctx.stroke();
+    ctx.textBaseline = "bottom";
+    ctx.fillText(String(Math.round(((d % 360) + 360) % 360)), x(d), pad.top - 4);
+  }
+  const offsetStep = niceStep(axisMax - axisMin, Math.max(2, Math.floor(plotW / 60)));
+  ctx.setLineDash([2, 6]);
+  ctx.textBaseline = "top";
+  for (let o = Math.ceil((axisMin - avg) / offsetStep) * offsetStep; o <= axisMax - avg + 1e-9; o += offsetStep) {
+    ctx.beginPath(); ctx.moveTo(x(avg + o), pad.top); ctx.lineTo(x(avg + o), pad.top + plotH); ctx.stroke();
+    ctx.fillText(o > 0 ? `+${Math.round(o)}` : String(Math.round(o)), x(avg + o), pad.top + plotH + 4);
+  }
+  ctx.setLineDash([]);
+  ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.fillText("Direction (deg)", pad.left, 4);
+  ctx.textBaseline = "bottom";
+  ctx.fillText("Offset to avg (deg)", pad.left, height - 2);
+
+  const { ticks, withSeconds } = timeTicks(tMin, tMax, Math.max(2, Math.floor(plotH / 50)));
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (const t of ticks) ctx.fillText(timeLabel(t, withSeconds), pad.left - 6, y(t));
+
+  // average line
+  ctx.strokeStyle = "#667eea"; ctx.setLineDash([6, 4]); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x(avg), pad.top); ctx.lineTo(x(avg), pad.top + plotH); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#667eea"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  ctx.fillText(`Avg: ${avg.toFixed(1)}°`, Math.min(Math.max(x(avg), pad.left + 30), width - pad.right - 30), pad.top - 16);
+
+  // points shifted into the axis range; a jump of more than 180° wraps around and breaks the line
+  const series = [];
+  let previous = null;
+  for (const p of m.points) {
+    if (settings.hideInvalidData && p.unreliable) { series.push(null); previous = null; continue; }
+    let d = p.direction;
+    if (d < axisMin) d += 360; else if (d > axisMax) d -= 360;
+    if (previous != null && Math.abs(d - previous) > 180) series.push(null);
+    series.push([x(d), y(p.ts), p.unreliable, p.ts]);
+    previous = d;
+  }
+  ctx.save();
+  ctx.beginPath(); ctx.rect(pad.left, pad.top, plotW, plotH); ctx.clip();
+  drawSeries(ctx, series, "#667eea");
+  ctx.restore();
+
+  if (hoverTs != null && hoverTs >= tMin && hoverTs <= tMax) {
+    ctx.strokeStyle = "#2f855a"; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y(hoverTs)); ctx.lineTo(pad.left + plotW, y(hoverTs)); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function buildWindModel() {
+  const visible = filteredMeasurements();
+  if (!visible.length) return null;
+  const ranges = computeUnreliableRanges(visible, settings.exclusionWindowSec * 1000);
+  const speeds = smooth(visible.map((m) => toUnit(m.true_wind_speed_mps)), (s) => s.reduce((a, b) => a + b, 0) / s.length);
+  const directions = smooth(visible.map((m) => m.true_wind_dir_deg), averageDirection);
+  const points = visible.map((m, i) => ({
+    ts: m.ts, speed: speeds[i], direction: directions[i], unreliable: isUnreliable(ranges, m.ts), record: m,
+  }));
+
+  const reliable = points.filter((p) => !p.unreliable);
+  const avg = averageDirection((reliable.length ? reliable : points).map((p) => p.direction));
+  let maxDistance = 0;
+  for (const p of settings.hideInvalidData ? reliable : points) {
+    let distance = Math.abs(p.direction - avg);
+    if (distance > 180) distance = 360 - distance;
+    maxDistance = Math.max(maxDistance, distance);
+  }
+  const span = Math.min(settings.maxDisplaySpanDeg / 2, Math.max(settings.minChartWidthDeg / 2, maxDistance + 5));
+  const direction = { avg, axisMin: Math.round((avg - span) / 5) * 5, axisMax: Math.round((avg + span) / 5) * 5 };
+
+  // KPI average over the average window, without unreliable samples
+  const latest = visible[visible.length - 1];
+  const cutoff = latest.ts - settings.avgWindowMinutes * 60 * 1000;
+  const window = visible.filter((m) => m.ts >= cutoff && !isUnreliable(ranges, m.ts));
+  const average = window.length ? {
+    speed: window.reduce((s, m) => s + m.true_wind_speed_mps, 0) / window.length,
+    direction: averageDirection(window.map((m) => m.true_wind_dir_deg)),
+  } : null;
+  return { points, direction, latest, average };
+}
+
+function renderWind() {
+  windModel = buildWindModel();
+  $("no-data").classList.toggle("hidden", windModel != null);
+  const latest = windModel?.latest;
+  $("kpi-tws").textContent = latest ? fmtSpeed(latest.true_wind_speed_mps) : "—";
+  $("kpi-twd").textContent = latest ? fmtDir(latest.true_wind_dir_deg) : "—";
+  $("kpi-avg-tws-label").textContent = `Avg True Wind Speed (${settings.avgWindowMinutes} min)`;
+  $("kpi-avg-twd-label").textContent = `Avg True Wind Direction (${settings.avgWindowMinutes} min)`;
+  $("kpi-avg-tws").textContent = windModel?.average ? fmtSpeed(windModel.average.speed) : "—";
+  $("kpi-avg-twd").textContent = windModel?.average ? fmtDir(windModel.average.direction) : "—";
+  drawSpeedChart();
+  drawDirectionChart();
+  updateBanner();
+}
+
+function nearestPoint(ts) {
+  if (!windModel) return null;
+  let best = null;
+  for (const p of windModel.points) if (!best || Math.abs(p.ts - ts) < Math.abs(best.ts - ts)) best = p;
+  return best;
+}
+
+function showTooltip(chart, event, ts) {
+  const tooltip = chart.box.querySelector(".tooltip");
+  const point = ts == null ? null : nearestPoint(ts);
+  hoverTs = point ? point.ts : null;
+  drawSpeedChart();
+  drawDirectionChart();
+  if (!point) { tooltip.style.display = "none"; return; }
+  const r = point.record;
+  tooltip.replaceChildren(
+    el("strong", {}, new Date(r.ts).toLocaleTimeString()), el("br"),
+    `True wind speed: ${fmtSpeed(r.true_wind_speed_mps)}`, el("br"),
+    `True wind direction: ${fmtDir(r.true_wind_dir_deg)}`, el("br"),
+    `Sensor speed: ${fmtSpeed(r.sensor_speed_mps)}`, el("br"),
+    `Sensor direction: ${fmtDir(r.sensor_heading_deg)}`, el("br"),
+    `Apparent wind speed: ${fmtSpeed(r.apparent_wind_speed_mps)}`, el("br"),
+    `Apparent wind direction: ${fmtDir(r.apparent_wind_dir_deg)}`,
+  );
+  tooltip.style.display = "block";
+  const box = chart.box.getBoundingClientRect();
+  const left = event.clientX - box.left + 14;
+  tooltip.style.left = `${Math.min(left, box.width - tooltip.offsetWidth - 4)}px`;
+  tooltip.style.top = `${Math.max(4, event.clientY - box.top - tooltip.offsetHeight - 10)}px`;
+}
+
+function hideTooltips() {
+  for (const chart of Object.values(charts)) chart.box.querySelector(".tooltip").style.display = "none";
+  hoverTs = null;
+  drawSpeedChart();
+  drawDirectionChart();
+}
+
+charts.speed.box.addEventListener("pointermove", (e) => {
+  const map = charts.speed.map;
+  if (!map) return;
+  const px = e.clientX - charts.speed.box.querySelector("canvas").getBoundingClientRect().left;
+  showTooltip(charts.speed, e, px < map.pad.left || px > map.pad.left + map.plotW ? null : map.invertX(px));
+});
+charts.direction.box.addEventListener("pointermove", (e) => {
+  const map = charts.direction.map;
+  if (!map) return;
+  const py = e.clientY - charts.direction.box.querySelector("canvas").getBoundingClientRect().top;
+  showTooltip(charts.direction, e, map.invertY(py));
+});
+for (const chart of Object.values(charts)) chart.box.addEventListener("pointerleave", hideTooltips);
+window.addEventListener("resize", () => { if (activeTab === "wind") renderWind(); });
+
+// ───────────────────────────────────────────── settings dialog
+function fillSelect(id, values, format) {
+  $(id).replaceChildren(...values.map((v) => el("option", { value: v }, format(v))));
+}
+fillSelect("s-timeframe", [5, 10, 15, 30, 45, 60, 75, 90], (m) => `${m} min`);
+fillSelect("s-exclusion", [0, 2, 5, 10, 15, 20, 30], (s) => (s ? `${s} s` : "Off"));
+fillSelect("s-avg", [5, 10, 15, 30, 45, 60], (m) => `${m} min`);
+fillSelect("s-maxspan", [45, 90, 180, 270, 360], (d) => `${d}°${d === 360 ? " (default)" : ""}`);
+fillSelect("s-smoothing", [5, 10, 15, 30, 45, 60, 90, 120], (s) => (s === 5 ? "5 s (none)" : `${s} s`));
+
+let pendingUnit = settings.windSpeedUnit;
+function openSettings() {
+  $("s-timeframe").value = settings.timeFrameMinutes;
+  $("s-unit").value = pendingUnit = settings.windSpeedUnit;
+  $("s-oldest").checked = settings.directionOldestAtTop;
+  $("s-exclusion").value = settings.exclusionWindowSec;
+  $("s-hide").checked = settings.hideInvalidData;
+  $("s-accel").value = settings.accelThresholdMs2;
+  $("s-heading").value = settings.headingRateThresholdDegs;
+  $("s-sensor").value = Math.round(toUnit(settings.sensorSpeedThresholdMps) * 10) / 10;
+  $("s-sensor-label").textContent = `Sensor speed threshold (${UNIT_LABEL[pendingUnit]})`;
+  $("s-avg").value = settings.avgWindowMinutes;
+  $("s-minwidth").value = settings.minChartWidthDeg;
+  $("s-maxspan").value = settings.maxDisplaySpanDeg;
+  $("s-smoothing").value = settings.smoothingWindowSec;
+  $("settings").classList.add("open");
+}
+$("s-unit").addEventListener("change", () => {
+  const mps = Number($("s-sensor").value) / UNIT_FACTOR[pendingUnit];
+  pendingUnit = $("s-unit").value;
+  $("s-sensor").value = Math.round(mps * UNIT_FACTOR[pendingUnit] * 10) / 10;
+  $("s-sensor-label").textContent = `Sensor speed threshold (${UNIT_LABEL[pendingUnit]})`;
+});
+$("settings-btn").addEventListener("click", openSettings);
+$("settings-close").addEventListener("click", () => $("settings").classList.remove("open"));
+$("settings").addEventListener("click", (e) => { if (e.target === $("settings")) $("settings").classList.remove("open"); });
+$("settings-apply").addEventListener("click", () => {
+  const grewTimeFrame = Number($("s-timeframe").value) > settings.timeFrameMinutes;
+  settings = {
+    timeFrameMinutes: Number($("s-timeframe").value),
+    windSpeedUnit: $("s-unit").value,
+    sensorSpeedThresholdMps: Math.max(0, (Number($("s-sensor").value) || 0) / UNIT_FACTOR[$("s-unit").value]),
+    directionOldestAtTop: $("s-oldest").checked,
+    exclusionWindowSec: Number($("s-exclusion").value),
+    hideInvalidData: $("s-hide").checked,
+    accelThresholdMs2: Number($("s-accel").value),
+    headingRateThresholdDegs: Number($("s-heading").value),
+    avgWindowMinutes: Number($("s-avg").value),
+    minChartWidthDeg: Number($("s-minwidth").value),
+    maxDisplaySpanDeg: Number($("s-maxspan").value),
+    smoothingWindowSec: Number($("s-smoothing").value),
+  };
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch (e) { /* ignore */ }
+  $("settings").classList.remove("open");
+  if (grewTimeFrame) measurements = []; // load the longer history again
+  trimMeasurements();
+  renderWind();
+  renderLive();
+  if (grewTimeFrame) pollMeasurements();
+});
+
+// ───────────────────────────────────────────── live values
+let status = null;
+
+async function pollStatus() {
+  try {
+    status = await api("/api/status");
+    renderLive();
+  } catch (e) { /* the banner shows connection problems */ }
+}
+
+function ageText(updated) {
+  if (updated == null || !status) return { text: "no data", level: "bad" };
+  const age = status.server_time - updated;
+  return { text: age < 1 ? "now" : `${formatAge(Math.round(age))} ago`, level: age > 10 ? "bad" : age > 3 ? "warn" : "" };
+}
+
+function card(title, section, rows) {
+  const age = section === undefined ? null : ageText(section?.updated);
+  return el("div", { class: "card" },
+    el("h2", {}, title, age ? el("span", { class: `age ${age.level}` }, age.text) : null),
+    el("dl", {}, rows.filter(Boolean).map(([k, v]) => [el("dt", {}, k), el("dd", {}, v ?? "—")])));
+}
+
+const vec = (v) => (v ? `${fmtSpeed(v.speed)} @ ${fmtDir(v.course)}` : "—");
+const yesNo = (v) => (v == null ? "—" : v ? "yes" : "no");
+
+function renderLive() {
+  if (!status) return;
+  const v = status.values;
+  const tw = v.true_wind || {}, aw = v.apparent_wind, hd = v.heading, gps = v.gps, f = v.filter, sys = status.system, mqtt = status.mqtt;
+  const cards = [
+    card("True wind", v.true_wind ?? null, [
+      tw.waiting_for?.length ? ["Waiting for", tw.waiting_for.join(", ")] : null,
+      ["Current", tw.speed != null ? `${fmtSpeed(tw.speed)} from ${fmtDir(tw.direction)}` : "—"],
+      ["5 s average", tw.average_speed != null ? `${fmtSpeed(tw.average_speed)} from ${fmtDir(tw.average_direction)}` : "—"],
+      ["Skipped, outdated input", tw.skipped_stale ?? 0],
+    ]),
+    card("Apparent wind & heading", aw ?? null, [
+      ["Apparent speed", fmtSpeed(aw?.speed)],
+      ["Apparent angle", fmtDir(aw?.angle)],
+      ["Heading", fmtDir(hd?.heading)],
+      ["Heading age", hd ? ageText(hd.updated).text : "—"],
+      ["Compass offset", fmtNum(hd?.compass_offset, 1, "°")],
+    ]),
+    card("GPS", gps ?? null, [
+      gps?.waiting_for_fix ? ["Status", "waiting for a fix"] : null,
+      ["Fix", gps ? `${gps.fix_type ?? "—"}${gps.valid === false ? " (invalid)" : ""}` : "—"],
+      ["Satellites", gps?.satellites ?? "—"],
+      ["Position", gps?.latitude != null ? `${gps.latitude.toFixed(5)}, ${gps.longitude.toFixed(5)}` : "—"],
+      ["Speed over ground", fmtSpeed(gps?.speed)],
+      ["Course over ground", fmtDir(gps?.course)],
+      ["Speed accuracy", fmtNum(gps?.speed_accuracy, 2, " m/s")],
+      ["Position accuracy", fmtNum(gps?.horizontal_accuracy, 1, " m")],
+      ["HDOP / PDOP", `${fmtNum(gps?.hdop, 2)} / ${fmtNum(gps?.pdop, 2)}`],
+      ["Message", gps?.source ?? "—"],
+      ["System clock vs GPS", gps?.clock_offset_ms != null ? `${(gps.clock_offset_ms / 1000).toFixed(1)} s` : "—"],
+    ]),
+    card("Velocity filter", f ?? null, f?.enabled === false ? [["Status", "disabled, averaging GPS samples"]] : [
+      ["Initialized", yesNo(f?.initialized)],
+      ["Filtered velocity", vec(f?.velocity)],
+      ["Measured velocity", vec(f?.measured_velocity)],
+      ["Acceleration", f?.acceleration ? `${fmtNum(f.acceleration.speed, 2, " m/s²")} @ ${fmtDir(f.acceleration.course)}` : "—"],
+      ["Velocity σ", fmtNum(f?.velocity_sigma, 2, " m/s")],
+      ["Last GPS measurement", f?.measurement_age_ms != null ? `${(f.measurement_age_ms / 1000).toFixed(1)} s before the wind` : "—"],
+      ["Accepted / rejected", f ? `${f.accepted} / ${f.rejected}` : "—"],
+      ["Resets", f?.resets ?? "—"],
+      ["Acceleration σ / τ", f ? `${f.acceleration_sigma} m/s² / ${f.acceleration_time_constant} s` : "—"],
+    ]),
+  ];
+  // Sections published by other parts of the windbot, e.g. a compass calibration
+  const known = new Set(["true_wind", "apparent_wind", "heading", "gps", "filter"]);
+  for (const [name, values] of Object.entries(v)) {
+    if (known.has(name)) continue;
+    const rows = Object.entries(values).filter(([k]) => k !== "updated")
+      .map(([k, value]) => [k.replaceAll("_", " "), typeof value === "number" ? +value.toFixed(3) : typeof value === "object" ? JSON.stringify(value) : String(value)]);
+    cards.push(card(name.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase()), values, rows));
+  }
+  cards.push(
+    card("Internet & MQTT", undefined, [
+      ["MQTT", mqtt.enabled ? (mqtt.state === "success" ? "connected" : mqtt.state ?? "connecting") : "disabled"],
+      mqtt.enabled ? ["Broker", mqtt.broker] : null,
+      mqtt.enabled ? ["Connection errors", mqtt.error_count ?? 0] : null,
+      ...(sys.interfaces || []).map((i) => [i.name, `${i.up ? "up" : "down"} ${i.addresses.join(", ")}`]),
+    ]),
+    card("System", undefined, [
+      ["Uptime", sys.uptime != null ? formatAge(Math.round(sys.uptime)) : "—"],
+      ["Load", fmtNum(sys.load, 2)],
+      ["CPU temperature", fmtNum(sys.cpu_temperature, 1, " °C")],
+      ["Memory free", sys.memory_available_mb != null ? `${sys.memory_available_mb} / ${sys.memory_total_mb} MB` : "—"],
+      ["Disk free", `${sys.disk_free_mb} / ${sys.disk_total_mb} MB`],
+      ["Throttled", sys.throttled ?? "—"],
+      ["Windbot time", new Date(status.server_time * 1000).toLocaleString()],
+    ]),
+  );
+  $("live-cards").replaceChildren(...cards);
+}
+
+// ───────────────────────────────────────────── Wi-Fi
+let wifi = null;
+let wifiError = null;
+
+async function pollWifi() {
+  try {
+    wifi = await api("/api/wifi");
+    wifiError = null;
+  } catch (e) {
+    wifiError = e.message;
+  }
+  renderWifi();
+}
+
+function renderWifi() {
+  const statusBox = $("wifi-status");
+  const activity = $("wifi-activity");
+  if (!wifi) {
+    statusBox.textContent = wifiError || "Loading…";
+    return;
+  }
+  const lines = [];
+  if (wifi.mode === "client") {
+    lines.push(el("div", {}, el("strong", {}, `Connected to ${wifi.ssid}`), wifi.signal != null ? ` · signal ${wifi.signal}%` : ""));
+    lines.push(el("div", { class: "muted" }, `Address ${wifi.address ?? "—"}`));
+  } else if (wifi.mode === "hotspot") {
+    lines.push(el("div", {}, el("strong", {}, `Hotspot "${wifi.hotspot_ssid}" is open`), wifi.clients != null ? ` · ${wifi.clients} device(s)` : ""));
+    lines.push(el("div", { class: "muted" }, `Dashboard at http://${wifi.hotspot_address}`));
+  } else if (wifi.mode === "searching") {
+    lines.push(el("div", {}, el("strong", {}, wifi.ssid ? `Connecting to ${wifi.ssid}…` : "Not connected")));
+    if (wifi.hotspot_in != null) lines.push(el("div", { class: "muted" }, `The hotspot opens in ${formatAge(wifi.hotspot_in)} unless a known network connects.`));
+    else if (!wifi.hotspot_enabled) lines.push(el("div", { class: "muted" }, "The hotspot is disabled in config.ini."));
+  } else {
+    lines.push(el("div", {}, "The Wi-Fi interface isn't available."));
+  }
+  statusBox.replaceChildren(...lines);
+  activity.replaceChildren(
+    wifi.action ? el("div", { class: "banner info", style: "margin-top:10px" }, `${wifi.action}…`) : "",
+    wifi.message ? el("div", { class: "banner info", style: "margin-top:10px" }, wifi.message) : "",
+    wifi.error ? el("div", { class: "banner bad", style: "margin-top:10px" }, wifi.error) : "",
+    wifiError ? el("div", { class: "banner bad", style: "margin-top:10px" }, wifiError) : "",
+  );
+  const busy = wifi.action != null;
+  $("hotspot-stop").classList.toggle("hidden", wifi.mode !== "hotspot");
+  $("hotspot-start").classList.toggle("hidden", wifi.mode === "hotspot" || wifi.mode === "unavailable");
+  $("hotspot-stop").disabled = $("hotspot-start").disabled = busy;
+
+  $("networks").replaceChildren(...(wifi.networks.length ? wifi.networks.map((n) => el("tr", {},
+    el("td", {}, n.ssid, n.active ? el("span", { class: "badge good" }, "connected") : null, n.autoconnect ? null : el("span", { class: "badge" }, "manual")),
+    el("td", {}, String(n.priority)),
+    el("td", { class: "actions" },
+      el("button", { class: "btn", disabled: busy || n.active, onclick: () => connectTo(n) }, "Connect"), " ",
+      el("button", { class: "btn", onclick: () => editNetwork(n) }, "Edit"), " ",
+      el("button", { class: "btn danger", disabled: n.active, onclick: () => deleteNetwork(n) }, "Delete")),
+  )) : [el("tr", {}, el("td", { colspan: 3, class: "muted" }, "No known networks."))]));
+}
+
+async function wifiAction(path, body, warning) {
+  if (warning && !confirm(warning)) return;
+  try {
+    await api(path, body);
+    wifiError = null;
+  } catch (e) {
+    wifiError = e.message;
+  }
+  await pollWifi();
+}
+
+const LOSE_CONNECTION = "If you are connected through the hotspot, this page loses its connection. "
+  + "If no network connects, the hotspot opens again.";
+
+$("hotspot-stop").addEventListener("click", () => wifiAction("/api/wifi/hotspot", { action: "stop" }, `${LOSE_CONNECTION}\n\nTurn off the hotspot?`));
+$("hotspot-start").addEventListener("click", () => wifiAction("/api/wifi/hotspot", { action: "start" },
+  `The windbot leaves ${wifi?.ssid ?? "the current network"} and opens the hotspot "${wifi?.hotspot_ssid}". Continue?`));
+
+function connectTo(network) {
+  wifiAction("/api/wifi/connect", { uuid: network.uuid }, `${LOSE_CONNECTION}\n\nConnect to ${network.ssid}?`);
+}
+
+function deleteNetwork(network) {
+  wifiAction("/api/wifi/networks/delete", { uuid: network.uuid }, `Forget ${network.ssid}?`);
+}
+
+function resetNetworkForm() {
+  $("network-form").reset();
+  $("nf-uuid").value = "";
+  $("nf-password").placeholder = "";
+  $("network-form-title").textContent = "Add network";
+  $("nf-cancel").classList.add("hidden");
+}
+
+function editNetwork(network) {
+  $("nf-uuid").value = network.uuid;
+  $("nf-ssid").value = network.ssid;
+  $("nf-password").value = "";
+  $("nf-password").placeholder = "unchanged";
+  $("nf-open").checked = false;
+  $("nf-priority").value = network.priority;
+  $("nf-autoconnect").checked = network.autoconnect;
+  $("network-form-title").textContent = `Edit ${network.ssid}`;
+  $("nf-cancel").classList.remove("hidden");
+  $("nf-ssid").focus();
+}
+
+$("nf-cancel").addEventListener("click", resetNetworkForm);
+$("nf-open").addEventListener("change", () => { $("nf-password").disabled = $("nf-open").checked; });
+$("network-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const editing = $("nf-uuid").value;
+  const password = $("nf-open").checked ? "" : $("nf-password").value;
+  try {
+    await api("/api/wifi/networks", {
+      uuid: editing || null,
+      ssid: $("nf-ssid").value,
+      // an empty password field keeps the current password of a known network
+      password: editing && !$("nf-open").checked && !password ? null : password,
+      priority: Number($("nf-priority").value) || 0,
+      autoconnect: $("nf-autoconnect").checked,
+      hidden: $("nf-hidden").checked,
+    });
+    wifiError = null;
+    resetNetworkForm();
+  } catch (err) {
+    wifiError = err.message;
+  }
+  await pollWifi();
+});
+
+$("scan-btn").addEventListener("click", async () => {
+  const list = $("scan-list");
+  $("scan-btn").disabled = true;
+  list.replaceChildren(el("li", { class: "muted" }, "Scanning…"));
+  try {
+    const { networks } = await api("/api/wifi/scan");
+    $("scan-ssids").replaceChildren(...networks.map((n) => el("option", { value: n.ssid })));
+    list.replaceChildren(...(networks.length ? networks.map((n) => el("li", {
+      onclick: () => {
+        resetNetworkForm();
+        $("nf-ssid").value = n.ssid;
+        $("nf-open").checked = !n.security;
+        $("nf-password").disabled = !n.security;
+        $("nf-password").focus();
+      },
+    }, el("span", {}, n.ssid, n.in_use ? el("span", { class: "badge good" }, "connected") : null),
+      el("span", { class: "muted" }, `${n.security ? "🔒 " : ""}${n.signal ?? "?"}%`))) : [el("li", { class: "muted" }, "No networks found.")]));
+  } catch (err) {
+    list.replaceChildren(el("li", { class: "muted" }, err.message));
+  } finally {
+    $("scan-btn").disabled = false;
+  }
+});
+
+// ───────────────────────────────────────────── polling
+async function loop(fn, intervalMs, when = () => true) {
+  for (;;) {
+    if (when() && !document.hidden) await fn();
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+loop(pollMeasurements, 1000);
+loop(pollStatus, 1000, () => activeTab === "live");
+loop(pollWifi, 3000, () => activeTab === "wifi");
+setInterval(updateBanner, 1000);
+</script>
+</body>
+</html>

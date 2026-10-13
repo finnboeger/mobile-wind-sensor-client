@@ -3,6 +3,7 @@ import logging.handlers
 import threading
 from queue import Queue
 
+import dashboard
 import gps
 import mqtt
 import nmea
@@ -73,6 +74,14 @@ if __name__ == "__main__":
 
         mqtt.init(mqtt_position_queue, mqtt_wind_queue)
 
+    if Config().NETWORK.ENABLE_LOCAL_WEBSERVER:
+        dashboard_position_queue: PositionQueue = Queue()
+        dashboard_wind_queue: WindOutputQueue = Queue()
+        position_output_queues.append(dashboard_position_queue)
+        wind_output_queues.append(dashboard_wind_queue)
+
+        dashboard.init(dashboard_position_queue, dashboard_wind_queue)
+
     gps.init(position_output_queues)
     n2k_node, heading_queue, wind_queue = nmea.init()
 
@@ -83,7 +92,6 @@ if __name__ == "__main__":
         daemon=True,
     ).start()
 
-    # TODO: potentially init local server
     # Start the worker thread to compute the true wind and send it the the consumers
     worker_thread = threading.Thread(
         target=wind.worker,
