@@ -15,6 +15,20 @@ Replay with a terminal UI:
 
 Controls: `space` play/pause, `n` step (paused), `+/-` change speed, `q` quit.
 
+## Velocity filter
+
+The true wind needs the boat's velocity at the moment the apparent wind was measured.
+GPS velocity only arrives at the navigation rate (2 Hz on the NEO-M8U), while the wind
+arrives faster. `src/kalman.py` tracks the north/east velocity and acceleration from
+the `NAV-PVT` velocity and its speed accuracy, and `wind.py` evaluates it at each wind
+timestamp. The filtered velocity is logged to the `velocity` data stream.
+
+- Turn it off with `FILTER.ENABLED = false` to compare with the old averaging in a replay.
+- Tune `FILTER.ACCELERATION_SIGMA` (larger reacts faster, smaller smooths more) and
+  `FILTER.ACCELERATION_TIME_CONSTANT` on recorded data with `src/replay.py`.
+- On startup the receiver is set to `GPS.DYNAMIC_MODEL` (default `sea`) and
+  `GPS.NAVIGATION_RATE_HZ` (default 2 Hz).
+
 ## Bill of Materials
 TODO
 

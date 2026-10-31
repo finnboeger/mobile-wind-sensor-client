@@ -7,12 +7,14 @@ import n2k
 
 import config
 import log
+from kalman import VelocityKalmanFilter
 from structs import (
     ApparentWindData,
     CorrectedApparentWindData,
     HeadingData,
     PositionData,
     TrueWindData,
+    VelocityData,
     WindData,
     WindOutputQueue,
 )
@@ -28,24 +30,85 @@ COMPASS_OFFSET = math.radians(config.Config().SENSOR.COMPASS_OFFSET_DEGREES)
 WIND_AVERAGING_MILLISECONDS = 5 * 1000
 
 
+#: speed accuracy in m/s assumed for logged positions that don't include one
+DEFAULT_SPEED_ACCURACY = 0.5
+
+
+def position_velocity(position: PositionData) -> Vector2D:
+    """Return the velocity over ground of a position, x is north and y is east."""
+    if position.velocity_north is not None and position.velocity_east is not None:
+        return Vector2D(x=position.velocity_north, y=position.velocity_east)
+    return Vector2D.from_polar(
+        PolarCoordinates(
+            angle=n2k.utils.deg_to_rad(position.true_course),
+            magnitude=position.speed,
+        ),
+    )
+
+
 def read_position_queue(
     position_queue: Queue[PositionData],
     latest_position_time: int | None,
+    velocity_filter: VelocityKalmanFilter | None,
 ) -> tuple[list[Vector2D], int | None]:
+    """
+    Read all waiting positions and feed them into the velocity filter.
+
+    :return: velocities of all read positions and the timestamp of the latest one
+    """
     movement_buffer: list[Vector2D] = []
     while not position_queue.empty():
         position = position_queue.get()
-        movement_buffer.append(
-            Vector2D.from_polar(
-                PolarCoordinates(
-                    angle=n2k.utils.deg_to_rad(position.true_course),
-                    magnitude=position.speed,
-                ),
-            ),
-        )
+        velocity = position_velocity(position)
+        movement_buffer.append(velocity)
         latest_position_time = position.timestamp
 
+        # HNR-PVT repeats or interpolates the GNSS solution, so only the GNSS
+        # measurements are independent. Positions logged before the source was
+        # recorded can't be told apart and are all used.
+        if velocity_filter is not None and position.source in (None, "NAV-PVT"):
+            velocity_filter.update(
+                position.timestamp,
+                velocity,
+                position.speed_accuracy
+                if position.speed_accuracy is not None
+                else DEFAULT_SPEED_ACCURACY,
+            )
+
     return movement_buffer, latest_position_time
+
+
+def movement_at(
+    velocity_filter: VelocityKalmanFilter | None,
+    timestamp: int,
+    movement_buffer: list[Vector2D],
+) -> Vector2D | None:
+    """
+    Return the boat's velocity over ground at the time of a wind measurement.
+
+    :param velocity_filter: velocity filter, or None to average the GPS samples
+    :param timestamp: time of the wind measurement in milliseconds
+    :param movement_buffer: velocities received since the last wind measurement
+    :return: the velocity, or None if no new estimate is available
+    """
+    if velocity_filter is None:
+        # average movement vector between wind updates
+        if len(movement_buffer) == 0:
+            return None
+        return sum(movement_buffer, start=Vector2D(x=0, y=0)) / len(movement_buffer)
+
+    # evaluate the filtered velocity at the time of the wind measurement
+    velocity = velocity_filter.velocity_at(timestamp)
+    if velocity is not None:
+        log.data(
+            "velocity",
+            VelocityData(
+                velocity_north=velocity.x,
+                velocity_east=velocity.y,
+                timestamp=timestamp,
+            ),
+        )
+    return velocity
 
 
 class WindBuffer:
@@ -95,6 +158,15 @@ def worker(
     # store the wind vectors of the last few seconds to compute an average
     true_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_MILLISECONDS)
     apparent_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_MILLISECONDS)
+    filter_config = config.Config().FILTER
+    velocity_filter = (
+        VelocityKalmanFilter(
+            acceleration_sigma=filter_config.ACCELERATION_SIGMA,
+            acceleration_time_constant=filter_config.ACCELERATION_TIME_CONSTANT,
+        )
+        if filter_config.ENABLED
+        else None
+    )
 
     while True:
         # get wind data, blocking
@@ -114,18 +186,16 @@ def worker(
         movement_buffer, latest_position_time = read_position_queue(
             position_queue,
             latest_position_time,
+            velocity_filter,
         )
 
-        # store average movement vector between wind updates
-        movement_buffer_length = len(movement_buffer)
-        if movement_buffer_length > 0:
-            current_movement_vector = (
-                sum(
-                    movement_buffer,
-                    start=Vector2D(x=0, y=0),
-                )
-                / movement_buffer_length
-            )
+        new_movement_vector = movement_at(
+            velocity_filter,
+            current_apparent_wind.timestamp,
+            movement_buffer,
+        )
+        if new_movement_vector is not None:
+            current_movement_vector = new_movement_vector
 
         # assert that both position and compass data are not None
         if (
