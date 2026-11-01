@@ -29,6 +29,33 @@ timestamp. The filtered velocity is logged to the `velocity` data stream.
 - On startup the receiver is set to `GPS.DYNAMIC_MODEL` (default `sea`) and
   `GPS.NAVIGATION_RATE_HZ` (default 2 Hz).
 
+## IMU
+
+An accelerometer and gyro (Adafruit ISM330DHCX) on the measurement unit improves the
+heading in turns and removes the sway of the mast. It is off by default, enable it with
+`IMU.ENABLED = true`.
+
+Everything works in the measurement unit's own axes: x is the unit's forward (the
+direction the compass heading and the wind angle refer to, not the bow), y right and
+z down. The compass, the wind sensor and the IMU turn together on the mast, so turning
+the mast or the boat needs no recalibration.
+
+- Wiring: the breakout's STEMMA QT port daisy-chains with the NEO-M8U's Qwiic port, or
+  connect VIN to 3.3 V (pin 1), GND to pin 6, SDA to GPIO 2 (pin 3) and SCL to GPIO 3
+  (pin 5). The default address is `0x6A`, `0x6B` with the DO pin tied to 3.3 V.
+- Mounting: fix the breakout rigidly to the measurement unit, in any orientation. Set
+  `IMU.AXES` to the sensor axes pointing forward, right and down; `x,-y,-z` is right for
+  a breakout lying flat with its x arrow pointing forward. It doesn't need to be level,
+  a slight tilt only shows up as a constant roll or pitch.
+- Self calibration: the gyro bias is learned from gravity (roll and pitch) and from the
+  compass (heading), so the first minute after start is less accurate.
+- Heading: `src/heading.py` integrates the gyro and corrects it with the compass. The
+  compass is modelled as damped with `IMU.COMPASS_LAG_SECONDS`; compare the `heading` and
+  `unit_heading` data streams after a quick turn to tune it.
+- Mast sway: set `IMU.WIND_SENSOR_POSITION` and `IMU.GPS_ANTENNA_POSITION` to their
+  positions relative to the IMU in metres (forward, right, down, so above is negative).
+  Their sway is then removed from the GPS velocity and added to the wind sensor's.
+
 ## Bill of Materials
 TODO
 
@@ -42,6 +69,8 @@ TODO
   - Uses UART (GPIO 14, 15)
 - [Sparkfun GPS Dead Reckoning breakout board using u-blox NEO-M8U](https://www.sparkfun.com/sparkfun-gps-dead-reckoning-breakout-neo-m8u-qwiic.html)
   - Supports SPI (via Jumper), UART and I2C
+- [Adafruit ISM330DHCX 6 DoF IMU](https://www.adafruit.com/product/4502)
+  - Uses I2C (GPIO 2, 3) at address 0x6A
 
 
 ## Set up instructions
