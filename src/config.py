@@ -87,6 +87,10 @@ class ImuConfig:
     COMPASS_SIGMA_DEGREES: float
     #: time constant of the compass damping in seconds, 0 if it doesn't lag
     COMPASS_LAG_SECONDS: float
+    #: position of the wind sensor relative to the IMU, forward, right and down in m
+    WIND_SENSOR_POSITION: tuple[float, float, float]
+    #: position of the GPS antenna relative to the IMU, forward, right and down in m
+    GPS_ANTENNA_POSITION: tuple[float, float, float]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -97,6 +101,15 @@ class FilterConfig:
     ACCELERATION_SIGMA: float
     #: time constant in seconds after which an acceleration has decayed to 1/e
     ACCELERATION_TIME_CONSTANT: float
+
+
+def parse_position(value: str) -> tuple[float, float, float]:
+    """Parse a position like ``"0, 0, -0.3"``."""
+    entries = [float(entry) for entry in value.split(",")]
+    if len(entries) != 3:  # noqa: PLR2004
+        msg = f"Position {value!r} needs three comma separated entries"
+        raise ValueError(msg)
+    return (entries[0], entries[1], entries[2])
 
 
 def parse_bool(value: str) -> bool:
@@ -290,6 +303,20 @@ class Config:
                 2.0,
             ),
             COMPASS_LAG_SECONDS=get(config, "IMU", "COMPASS_LAG_SECONDS", float, 1.0),
+            WIND_SENSOR_POSITION=get(
+                config,
+                "IMU",
+                "WIND_SENSOR_POSITION",
+                parse_position,
+                (0.0, 0.0, 0.0),
+            ),
+            GPS_ANTENNA_POSITION=get(
+                config,
+                "IMU",
+                "GPS_ANTENNA_POSITION",
+                parse_position,
+                (0.0, 0.0, 0.0),
+            ),
         )
 
     def __repr__(self) -> str:
