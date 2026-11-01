@@ -273,7 +273,7 @@ class Config:
 
         self.IMU = ImuConfig(
             ENABLED=get(config, "IMU", "ENABLED", parse_bool, False),
-            DEVICE=get(config, "IMU", "DEVICE", str, "mock").strip().lower(),
+            DEVICE=get(config, "IMU", "DEVICE", str, "ism330dhcx").strip().lower(),
             I2C_BUS=get(config, "IMU", "I2C_BUS", int, 1),
             ADDRESS=get(config, "IMU", "ADDRESS", lambda value: int(value, 0), 0x6A),
             AXES=get(config, "IMU", "AXES", str, "x,-y,-z"),

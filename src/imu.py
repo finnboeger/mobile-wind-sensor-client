@@ -15,8 +15,11 @@ from collections.abc import Callable
 from queue import Queue
 from typing import Protocol
 
+from smbus2 import SMBus
+
 import config
 import log
+from ism330dhcx import ISM330DHCX
 from structs import ImuSample, Vector3
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,11 @@ class MockImu:
 
 #: available devices by their name in the config
 DEVICES: dict[str, Callable[[config.ImuConfig], ImuDevice]] = {
+    "ism330dhcx": lambda imu_config: ISM330DHCX(
+        SMBus(imu_config.I2C_BUS),
+        imu_config.ADDRESS,
+        imu_config.SAMPLE_RATE_HZ,
+    ),
     "mock": lambda _: MockImu(),
 }
 
