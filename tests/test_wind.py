@@ -6,9 +6,11 @@ from queue import Empty, Queue
 import jsonpickle
 
 import wind
+from motion import UnitMotion
 from structs import (
     ApparentWindData,
     HeadingData,
+    ImuSample,
     PositionData,
     WindOutputQueue,
 )
@@ -86,3 +88,25 @@ def test_worker_subtracts_filtered_velocity() -> None:
         raise AssertionError(msg) from e
 
     assert true_wind.wind_speed < 1e-6
+
+
+def test_heading_at_prefers_the_gyro_aided_heading() -> None:
+    heading_queue: Queue[HeadingData] = Queue()
+    imu_queue: Queue[list[ImuSample]] = Queue()
+    heading_queue.put(HeadingData(heading=0.0, timestamp=0))
+    imu_queue.put(
+        [
+            ImuSample(
+                timestamp=i * 10,
+                acceleration=(0.0, 0.0, -9.80665),
+                angular_rate=(0.0, 0.0, math.radians(20)),
+            )
+            for i in range(101)
+        ],
+    )
+    motion = UnitMotion()
+    current = wind.read_heading_queues(heading_queue, imu_queue, motion, None)
+    assert current is not None
+    assert current == HeadingData(heading=0.0, timestamp=0)
+    assert abs(math.degrees(wind.heading_at(motion, 1000, current)) - 20) < 1
+    assert wind.heading_at(None, 1000, current) == 0.0

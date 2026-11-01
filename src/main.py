@@ -10,7 +10,7 @@ import nmea
 import wind
 from config import Config
 from log import DATA_SEPARATOR
-from structs import PositionQueue, WindOutputQueue
+from structs import ImuSample, PositionQueue, WindOutputQueue
 
 
 def init_logging() -> None:
@@ -75,8 +75,9 @@ if __name__ == "__main__":
         mqtt.init(mqtt_position_queue, mqtt_wind_queue)
 
     gps.init(position_output_queues)
-    # The IMU samples are only logged for now
-    imu.init([])
+    # The IMU samples feed the gyro aided heading of the wind worker
+    wind_imu_queue: Queue[list[ImuSample]] = Queue()
+    imu.init([wind_imu_queue])
     n2k_node, heading_queue, wind_queue = nmea.init()
 
     # Forward the GPS data to the NMEA2000 network
@@ -95,6 +96,7 @@ if __name__ == "__main__":
             heading_queue,
             wind_queue,
             wind_output_queues,
+            wind_imu_queue if Config().IMU.ENABLED else None,
         ),
     )
     worker_thread.start()

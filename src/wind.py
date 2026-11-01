@@ -7,11 +7,14 @@ import n2k
 
 import config
 import log
+from heading import HeadingFilter
 from kalman import VelocityKalmanFilter
+from motion import UnitMotion
 from structs import (
     ApparentWindData,
     CorrectedApparentWindData,
     HeadingData,
+    ImuSample,
     PositionData,
     TrueWindData,
     VelocityData,
@@ -111,6 +114,64 @@ def movement_at(
     return velocity
 
 
+def read_heading_queues(
+    heading_queue: Queue[HeadingData],
+    imu_queue: Queue[list[ImuSample]] | None,
+    motion: UnitMotion | None,
+    current_heading: HeadingData | None,
+) -> HeadingData | None:
+    """
+    Read all waiting compass readings and IMU samples and feed them into the motion.
+
+    :return: the latest compass reading
+    """
+    headings: list[HeadingData] = []
+    while not heading_queue.empty():
+        headings.append(heading_queue.get())
+
+    samples: list[ImuSample] = []
+    while imu_queue is not None and not imu_queue.empty():
+        samples.extend(imu_queue.get())
+
+    if motion is not None:
+        motion.add(samples, headings)
+
+    return headings[-1] if headings else current_heading
+
+
+def heading_at(
+    motion: UnitMotion | None,
+    timestamp: int,
+    current_heading: HeadingData,
+) -> float:
+    """
+    Return the unit's heading at the time of a wind measurement.
+
+    :param motion: motion of the unit, or None to use the latest compass reading
+    :param timestamp: time of the wind measurement in milliseconds
+    :param current_heading: latest compass reading
+    :return: heading in rad
+    """
+    heading = motion.heading_at(timestamp) if motion is not None else None
+    if heading is None:
+        return current_heading.heading
+    log.data("unit_heading", HeadingData(heading=heading, timestamp=timestamp))
+    return heading
+
+
+def create_motion() -> UnitMotion | None:
+    """Return the unit's motion tracker if the IMU is enabled."""
+    imu_config = config.Config().IMU
+    if not imu_config.ENABLED:
+        return None
+    return UnitMotion(
+        HeadingFilter(
+            compass_sigma=math.radians(imu_config.COMPASS_SIGMA_DEGREES),
+            compass_lag=imu_config.COMPASS_LAG_SECONDS,
+        ),
+    )
+
+
 class WindBuffer:
     def __init__(self, max_age: int) -> None:
         self.buffer: list[tuple[Vector2D, int]] = []
@@ -151,6 +212,7 @@ def worker(
     heading_queue: Queue[HeadingData],
     wind_queue: Queue[ApparentWindData],
     consumers: list[WindOutputQueue],
+    imu_queue: Queue[list[ImuSample]] | None = None,
 ) -> None:
     current_movement_vector: Vector2D | None = None
     latest_position_time: int | None = None
@@ -167,6 +229,7 @@ def worker(
         if filter_config.ENABLED
         else None
     )
+    motion = create_motion() if imu_queue is not None else None
 
     while True:
         # get wind data, blocking
@@ -177,10 +240,13 @@ def worker(
             n2k.utils.rad_to_deg(current_apparent_wind.wind_angle),
         )
 
-        # get every message in compass data, non-blocking
-        while not heading_queue.empty():
-            # store latest compass data
-            current_heading = heading_queue.get()
+        # get every compass reading and IMU sample, non-blocking
+        current_heading = read_heading_queues(
+            heading_queue,
+            imu_queue,
+            motion,
+            current_heading,
+        )
 
         # get every message in position data, non-blocking
         movement_buffer, latest_position_time = read_position_queue(
@@ -227,7 +293,7 @@ def worker(
         current_apparent_wind_vector = Vector2D.from_polar(
             PolarCoordinates(
                 angle=current_apparent_wind.wind_angle
-                + current_heading.heading
+                + heading_at(motion, current_apparent_wind.timestamp, current_heading)
                 + COMPASS_OFFSET,
                 magnitude=current_apparent_wind.wind_speed,
             ),
