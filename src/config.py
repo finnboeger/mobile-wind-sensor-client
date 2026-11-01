@@ -83,6 +83,10 @@ class ImuConfig:
     AXES: str
     #: sample rate in Hz
     SAMPLE_RATE_HZ: float
+    #: standard deviation of a compass reading in degrees, for the gyro aided heading
+    COMPASS_SIGMA_DEGREES: float
+    #: time constant of the compass damping in seconds, 0 if it doesn't lag
+    COMPASS_LAG_SECONDS: float
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -278,6 +282,14 @@ class Config:
             ADDRESS=get(config, "IMU", "ADDRESS", lambda value: int(value, 0), 0x6A),
             AXES=get(config, "IMU", "AXES", str, "x,-y,-z"),
             SAMPLE_RATE_HZ=get(config, "IMU", "SAMPLE_RATE_HZ", float, 104.0),
+            COMPASS_SIGMA_DEGREES=get(
+                config,
+                "IMU",
+                "COMPASS_SIGMA_DEGREES",
+                float,
+                2.0,
+            ),
+            COMPASS_LAG_SECONDS=get(config, "IMU", "COMPASS_LAG_SECONDS", float, 1.0),
         )
 
     def __repr__(self) -> str:
