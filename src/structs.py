@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from queue import Queue
 from typing import TypeAlias
 
+#: three dimensional vector (x, y, z)
+Vector3: TypeAlias = tuple[float, float, float]
+
 
 @dataclass(frozen=False, kw_only=True)
 class PositionData:
@@ -59,6 +62,23 @@ class HeadingData:
     heading: float
     #: timestamp of the heading data in milliseconds
     timestamp: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class ImuSample:
+    """
+    One accelerometer and gyro sample in the measurement unit's axes.
+
+    x points to the unit's forward direction (the direction the compass heading and
+    the wind angle refer to), y to its right and z down.
+    """
+
+    #: time of the sample in milliseconds since epoch
+    timestamp: int
+    #: specific force in m/s², reads (0, 0, -9.81) while the unit is still and level
+    acceleration: Vector3
+    #: angular rate in rad/s, positive for a right-handed rotation about each axis
+    angular_rate: Vector3
 
 
 @dataclass(frozen=True, kw_only=True)

@@ -70,6 +70,22 @@ class GPSConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ImuConfig:
+    #: read the IMU
+    ENABLED: bool
+    #: name of the IMU device, a key of imu.DEVICES
+    DEVICE: str
+    #: number of the I2C bus, e.g. 1 for /dev/i2c-1
+    I2C_BUS: int
+    #: I2C address of the IMU
+    ADDRESS: int
+    #: sensor axes pointing forward, right and down in the unit, e.g. "x,-y,-z"
+    AXES: str
+    #: sample rate in Hz
+    SAMPLE_RATE_HZ: float
+
+
+@dataclass(frozen=True, kw_only=True)
 class FilterConfig:
     #: use the Kalman filter for the boat velocity instead of averaging GPS samples
     ENABLED: bool
@@ -94,6 +110,7 @@ class Config:
     MQTT: MQTTConfig | None
     GPS: GPSConfig
     FILTER: FilterConfig
+    IMU: ImuConfig
 
     def __new__(cls) -> "Config":
         if cls._instance is None:
@@ -252,6 +269,15 @@ class Config:
                 float,
                 2.0,
             ),
+        )
+
+        self.IMU = ImuConfig(
+            ENABLED=get(config, "IMU", "ENABLED", parse_bool, False),
+            DEVICE=get(config, "IMU", "DEVICE", str, "mock").strip().lower(),
+            I2C_BUS=get(config, "IMU", "I2C_BUS", int, 1),
+            ADDRESS=get(config, "IMU", "ADDRESS", lambda value: int(value, 0), 0x6A),
+            AXES=get(config, "IMU", "AXES", str, "x,-y,-z"),
+            SAMPLE_RATE_HZ=get(config, "IMU", "SAMPLE_RATE_HZ", float, 104.0),
         )
 
     def __repr__(self) -> str:

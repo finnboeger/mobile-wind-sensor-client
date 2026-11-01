@@ -4,6 +4,7 @@ import threading
 from queue import Queue
 
 import gps
+import imu
 import mqtt
 import nmea
 import wind
@@ -74,6 +75,8 @@ if __name__ == "__main__":
         mqtt.init(mqtt_position_queue, mqtt_wind_queue)
 
     gps.init(position_output_queues)
+    # The IMU samples are only logged for now
+    imu.init([])
     n2k_node, heading_queue, wind_queue = nmea.init()
 
     # Forward the GPS data to the NMEA2000 network
