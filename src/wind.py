@@ -53,16 +53,24 @@ def read_position_queue(
     position_queue: Queue[PositionData],
     latest_position_time: int | None,
     velocity_filter: VelocityKalmanFilter | None,
+    motion: UnitMotion | None = None,
 ) -> tuple[list[Vector2D], int | None]:
     """
     Read all waiting positions and feed them into the velocity filter.
 
-    :return: velocities of all read positions and the timestamp of the latest one
+    :param motion: motion of the unit, to remove the sway of the GPS antenna
+    :return: velocities of all read positions at the IMU and the timestamp of the
+        latest one
     """
     movement_buffer: list[Vector2D] = []
     while not position_queue.empty():
         position = position_queue.get()
         velocity = position_velocity(position)
+        if motion is not None:
+            velocity -= motion.lever_arm_velocity(
+                position.timestamp,
+                motion.gps_antenna_position,
+            )
         movement_buffer.append(velocity)
         latest_position_time = position.timestamp
 
@@ -159,6 +167,20 @@ def heading_at(
     return heading
 
 
+def sensor_velocity(
+    motion: UnitMotion | None,
+    timestamp: int,
+    boat_velocity: Vector2D,
+) -> Vector2D:
+    """Return the wind sensor's velocity: the boat's plus the sway of the mast."""
+    if motion is None:
+        return boat_velocity
+    return boat_velocity + motion.lever_arm_velocity(
+        timestamp,
+        motion.wind_sensor_position,
+    )
+
+
 def create_motion() -> UnitMotion | None:
     """Return the unit's motion tracker if the IMU is enabled."""
     imu_config = config.Config().IMU
@@ -169,6 +191,8 @@ def create_motion() -> UnitMotion | None:
             compass_sigma=math.radians(imu_config.COMPASS_SIGMA_DEGREES),
             compass_lag=imu_config.COMPASS_LAG_SECONDS,
         ),
+        wind_sensor_position=imu_config.WIND_SENSOR_POSITION,
+        gps_antenna_position=imu_config.GPS_ANTENNA_POSITION,
     )
 
 
@@ -253,6 +277,7 @@ def worker(
             position_queue,
             latest_position_time,
             velocity_filter,
+            motion,
         )
 
         new_movement_vector = movement_at(
@@ -299,8 +324,10 @@ def worker(
             ),
         )
 
-        current_true_wind_vector = (
-            current_apparent_wind_vector - current_movement_vector
+        current_true_wind_vector = current_apparent_wind_vector - sensor_velocity(
+            motion,
+            current_apparent_wind.timestamp,
+            current_movement_vector,
         )
 
         # send wind vector to output queues (mqtt, db, lora)
