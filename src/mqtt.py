@@ -89,6 +89,13 @@ KEEPALIVE_S: Final = 30
 RECONNECT_MIN_DELAY_S: Final = 1
 RECONNECT_MAX_DELAY_S: Final = 30
 
+# Read by the local dashboard. "state" is None until the first attempt finishes,
+# then "success" while connected and "fail" while not.
+connection_status = {
+    "state": None,
+    "error_count": 0,
+}
+
 
 def connect_callback(
     _client: mqtt.Client | None,
@@ -98,12 +105,15 @@ def connect_callback(
     _properties: mqtt_properties.Properties,
 ) -> None:
     if not reason_code.is_failure:
+        connection_status["state"] = "success"
         logger.info(
             "Connected to MQTT broker with response: %s",
             reason_code.getName(),
         )
         return
 
+    connection_status["state"] = "fail"
+    connection_status["error_count"] += 1
     logger.error(
         "Failed to connect to MQTT broker with error: %s",
         reason_code.getName(),
@@ -111,6 +121,8 @@ def connect_callback(
 
 
 def connect_fail_callback(_client: mqtt.Client, _userdata: Any) -> None:  # noqa: ANN401
+    connection_status["state"] = "fail"
+    connection_status["error_count"] += 1
     logger.warning("Failed to connect to MQTT broker due to network error, retrying")
 
 
@@ -122,6 +134,7 @@ def disconnect_callback(
 ) -> None:
     # Called with the paho v1 callback signature for MQTTv5: the reason is a
     # ReasonCode if the broker sent a DISCONNECT, otherwise a local error code.
+    connection_status["state"] = "fail"
     logger.warning("Disconnected from MQTT broker (%s), reconnecting", reason)
 
 

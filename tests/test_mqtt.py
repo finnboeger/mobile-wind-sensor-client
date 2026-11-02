@@ -93,6 +93,7 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
         ),
     )
     monkeypatch.setattr(mqtt, "Config", lambda: config)
+    monkeypatch.setattr(mqtt, "connection_status", {"state": None, "error_count": 0})
 
     position_queue: Queue[PositionData] = Queue()
     wind_queue: Queue[tuple[CorrectedApparentWindData, TrueWindData]] = Queue()
@@ -122,6 +123,10 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
             packet_type, body = _read_packet(conn)
             while packet_type != PUBLISH:
                 packet_type, body = _read_packet(conn)
+
+    # Shown on the local dashboard
+    assert mqtt.connection_status["state"] == "success"
+    assert mqtt.connection_status["error_count"] >= 1
 
     topic, payload = _parse_publish(body)
     assert topic == "test/topic"
