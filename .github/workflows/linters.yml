@@ -19,18 +19,12 @@ jobs:
         with:
           python-version: 3.13
       - name: Install dependencies
+        # pyproject.toml points pyright at .venv, so the pre-commit hook sees the dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.dev.txt
-      - name: Run Linter
-        run: ruff check
-      - name: Run formatter
-        run: ruff format --check
-      - name: Run Typechecker
-        uses: jakebailey/pyright-action@v2
-        with:
-          version: 1.1.399
-      - name: Perform Bandit Analysis
-        run: bandit -r src
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements.dev.txt
+      - name: Run linters, formatter, typechecker and Bandit
+        run: .venv/bin/pre-commit run --all-files --show-diff-on-failure
       - name: Run Tests
-        run: pytest -vv
+        run: .venv/bin/pytest -vv
