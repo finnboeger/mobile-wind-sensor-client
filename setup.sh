@@ -17,6 +17,9 @@ Options:
 	-s, --ssid NAME           WiFi SSID
 	-p, --password VALUE      WiFi password
 	-P, --user-password VALUE System user password (username: pi)
+	-g, --git                 Clone the repository instead of installing the latest
+	                          release (for development, the dashboard then has to be
+	                          built by hand)
 	-y, --yes                 Skip interactive confirmations
   -h, --help                Show this help
 EOF
@@ -146,6 +149,7 @@ SSID="${SSID:-}"
 WIFI_PASSWORD="${WIFI_PASSWORD:-}"
 USER_PASSWORD="${USER_PASSWORD:-}"
 ASSUME_YES="false"
+INSTALL_FROM_GIT="false"
 AUTO_SDCARD="false"
 MOUNTED_ROOT="false"
 MOUNTED_BOOT="false"
@@ -193,6 +197,10 @@ while [[ $# -gt 0 ]]; do
 		-P|--user-password|--user_password)
 			USER_PASSWORD="$2"
 			shift 2
+			;;
+		-g|--git)
+			INSTALL_FROM_GIT="true"
+			shift
 			;;
 		-y|--yes)
 			ASSUME_YES="true"
@@ -366,10 +374,14 @@ WantedBy=multi-user.target
 EOF
 
 # Add post-first-boot setup script
-cat <<'EOF' > "$SDCARD/home/pi/windbot-post-firstboot.sh"
+cat <<EOF > "$SDCARD/home/pi/windbot-post-firstboot.sh"
 #!/bin/bash
 
 set -euox pipefail
+
+INSTALL_FROM_GIT="$INSTALL_FROM_GIT"
+EOF
+cat <<'EOF' >> "$SDCARD/home/pi/windbot-post-firstboot.sh"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -382,8 +394,19 @@ apt-get -y install zsh tmux libi2c-dev can-utils python3-venv python3-setuptools
 
 systemctl enable canbus
 
-if [[ ! -d /home/pi/mobile-wind-sensor-client ]]; then
-	sudo -u pi git clone https://github.com/finnboeger/mobile-wind-sensor-client.git /home/pi/mobile-wind-sensor-client
+if [[ "$INSTALL_FROM_GIT" == "true" ]]; then
+	if [[ ! -d /home/pi/mobile-wind-sensor-client ]]; then
+		sudo -u pi git clone https://github.com/finnboeger/mobile-wind-sensor-client.git /home/pi/mobile-wind-sensor-client
+	fi
+	sudo -u pi python3 -m venv /home/pi/mobile-wind-sensor-client/.venv
+	sudo -u pi /home/pi/mobile-wind-sensor-client/.venv/bin/pip install -r /home/pi/mobile-wind-sensor-client/requirements.txt
+else
+	# update.sh installs the latest release, including the built dashboard. Later
+	# updates use the copy in mobile-wind-sensor-client.
+	curl -fsSL https://github.com/finnboeger/mobile-wind-sensor-client/releases/latest/download/update.sh -o /tmp/windbot-update.sh
+	chmod 755 /tmp/windbot-update.sh
+	sudo -u pi /tmp/windbot-update.sh
+	rm /tmp/windbot-update.sh
 fi
 
 cat <<'UNIT' > /etc/systemd/system/windbot.service

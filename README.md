@@ -36,7 +36,14 @@ These instructions are not necessarily correct for everybody, as some people mig
 The instructions have been tested with RaspiOS Lite Bookworm
 
 ### Prepare Raspberry Pi
-Download the Raspberry Pi OS Lite image from https://www.raspberrypi.com/software/operating-systems/, then run the `setup.sh` script, which handles all relevant steps.
+Download the Raspberry Pi OS Lite image from https://www.raspberrypi.com/software/operating-systems/, then run the `setup.sh` script, which handles all relevant steps. It doesn't need a clone of this repository, every release contains it:
+
+```bash
+curl -fsSLO https://github.com/finnboeger/mobile-wind-sensor-client/releases/latest/download/setup.sh
+chmod +x setup.sh
+sudo ./setup.sh   # writes the SD card, see ./setup.sh --help for the options
+```
+
 In summary, it will
 - write the image to the sdcard
 - set username and password
@@ -50,10 +57,18 @@ After the script has run, insert the SD Card into the Raspberry Pi, power it on 
 - update the installed packages
 - install zsh, tmux, libi2c-dev, can-utils, python3-venv, python3-setuptools, libconfig-general-perl, jq, make, gcc and git
 - enable the canbus on system start
+- install the latest release of the windbot code to `mobile-wind-sensor-client` (with `--git` it clones the repository instead)
 - create and enable a systemd service to start the windbot code
 - copy `config.default.ini` to `config.ini` in `mobile-wind-sensor-client`
 
 Lastly as a manual step, the values in the `config.ini` need to be set.
+
+### Releases and updates
+A release is published by CI whenever the `version` in `pyproject.toml` changes to one without a release. It contains the code and the built dashboard, so built files are never committed.
+
+To update a Pi installed from a release, run `~/mobile-wind-sensor-client/update.sh` for the latest release or `update.sh 0.3.0` for a specific one. It keeps `config.ini`, the virtual environment and the logs, and restarts the service.
+
+A git checkout (`setup.sh --git`, for development) is updated with `git pull`. The dashboard has to be built there by hand.
 
 Personal preference: Install oh-my-zsh and set theme
 1. `sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"`

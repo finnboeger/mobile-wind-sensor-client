@@ -1,0 +1,67 @@
+name: Release
+
+# Publishes a release whenever the version in pyproject.toml changes to one that has no
+# release yet. The Pi installs and updates from these releases with update.sh, so built
+# files (like the dashboard bundle) never need to be committed.
+
+on:
+  push:
+    branches:
+      - main
+      - v2
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Read the version
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "Release v$version exists already, nothing to do."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Set up Node
+        if: steps.version.outputs.new == 'true' && hashFiles('src/dashboard/web/package-lock.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/dashboard/web/package-lock.json
+      - name: Build the dashboard
+        if: steps.version.outputs.new == 'true' && hashFiles('src/dashboard/web/package-lock.json') != ''
+        working-directory: src/dashboard/web
+        run: |
+          npm ci
+          npm run build
+      - name: Pack the client
+        if: steps.version.outputs.new == 'true'
+        run: |
+          mkdir release
+          git archive HEAD | tar -x -C release
+          if [ -d src/dashboard/static ]; then
+            rm -rf release/src/dashboard/static
+            cp -r src/dashboard/static release/src/dashboard/static
+          fi
+          echo "${{ steps.version.outputs.version }}" > release/VERSION
+          tar -czf windbot-client.tar.gz -C release .
+      - name: Publish the release
+        if: steps.version.outputs.new == 'true'
+        run: |
+          gh release create "v${{ steps.version.outputs.version }}" \
+            windbot-client.tar.gz update.sh setup.sh \
+            --target "$GITHUB_SHA" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
