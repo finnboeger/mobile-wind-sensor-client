@@ -36,7 +36,14 @@ These instructions are not necessarily correct for everybody, as some people mig
 The instructions have been tested with RaspiOS Lite Bookworm
 
 ### Prepare Raspberry Pi
-Download the Raspberry Pi OS Lite image from https://www.raspberrypi.com/software/operating-systems/, then run the `setup.sh` script, which handles all relevant steps.
+Download the Raspberry Pi OS Lite image from https://www.raspberrypi.com/software/operating-systems/, then run the `setup.sh` script, which handles all relevant steps. It doesn't need a clone of this repository, every release contains it:
+
+```bash
+curl -fsSLO https://github.com/finnboeger/mobile-wind-sensor-client/releases/latest/download/setup.sh
+chmod +x setup.sh
+sudo ./setup.sh   # writes the SD card, see ./setup.sh --help for the options
+```
+
 In summary, it will
 - write the image to the sdcard
 - set username and password
