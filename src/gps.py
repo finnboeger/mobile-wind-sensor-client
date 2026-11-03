@@ -10,6 +10,7 @@ import pyubx2
 import pyubx2.ubxtypes_core
 import serial
 
+import clock
 import config
 import log
 from structs import PositionData
@@ -213,6 +214,32 @@ def log_position_info(last_position: PositionData, position: PositionData) -> No
         )
 
 
+def utc_timestamp_ms(message: UbxNavPvt | UbxHnrPvt) -> int:
+    """Return the UTC time of a fix in milliseconds since epoch."""
+    return (
+        int(
+            datetime.datetime(
+                year=message.year,
+                month=message.month,
+                day=message.day,
+                hour=message.hour,
+                minute=message.minute,
+                second=message.second,
+                tzinfo=datetime.timezone.utc,  # noqa: UP017
+            ).timestamp()
+            * 1000,
+        )
+        # nanoseconds can be negative, thus we're applying them on the timestamp
+        + message.nano // 1_000_000
+    )
+
+
+def sync_clock(message: UbxNavPvt) -> None:
+    """Set the system clock from a fix whose UTC date and time are fully known."""
+    if message.valid_date and message.valid_time and message.fully_resolved:
+        clock.sync_from_gps(utc_timestamp_ms(message))
+
+
 def worker(
     message_queue: Queue[pyubx2.UBXMessage],
     output_queues: list[Queue[PositionData]],
@@ -237,22 +264,7 @@ def worker(
         nonlocal last_position
 
         position = PositionData(
-            timestamp=(
-                int(
-                    datetime.datetime(
-                        year=message.year,
-                        month=message.month,
-                        day=message.day,
-                        hour=message.hour,
-                        minute=message.minute,
-                        second=message.second,
-                        tzinfo=datetime.timezone.utc,  # noqa: UP017
-                    ).timestamp()
-                    * 1000,
-                )
-                # nanoseconds can be negative, thus we're applying them on the timestamp
-                + message.nano // 1_000_000
-            ),
+            timestamp=utc_timestamp_ms(message),
             valid=message.fix_type
             in (
                 GnssFixType.FIX_2D,
@@ -297,6 +309,7 @@ def worker(
             number_of_satellites_used = message.num_sv
             positional_dilution_of_precision = message.p_dop
             submit_position_data(message)
+            sync_clock(message)
         elif message.identity == "HNR-PVT":
             hnr_pvt_message = parse_ubx_hnr_pvt_message(message)
             submit_position_data(hnr_pvt_message)
