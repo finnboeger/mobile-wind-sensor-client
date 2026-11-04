@@ -39,7 +39,8 @@ class NetworkConfig:
     ENABLE_LOCAL_WEBSERVER: bool
     #: TCP port of the local dashboard
     WEBSERVER_PORT: int
-    #: Wi-Fi interface, the only one besides localhost the dashboard listens on
+    #: Wi-Fi interface: shown on the dashboard, and the only one besides localhost
+    #: that the dashboard listens on
     WIFI_INTERFACE: str
     AP_SSID: str | None
     AP_PASSWORD: str | None

@@ -72,3 +72,40 @@ export async function fetchStatus(): Promise<StatusResponse> {
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as StatusResponse;
 }
+
+export interface KnownNetwork {
+  uuid: string;
+  ssid: string;
+  autoconnect: boolean;
+  priority: number;
+  active: boolean;
+}
+
+export interface WifiStatus {
+  mode: "client" | "searching" | "unavailable";
+  ssid: string | null;
+  address: string | null;
+  signal: number | null;
+  networks: KnownNetwork[];
+}
+
+export interface ScannedNetwork {
+  ssid: string;
+  signal: number | null;
+  security: string;
+  in_use: boolean;
+}
+
+/** ms a scan may take: the windbot rescans for up to 30 s, then lists what it knows */
+export const SCAN_TIMEOUT_MS = 45_000;
+
+async function getJson<T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  const response = await fetch(path, { signal: AbortSignal.timeout(timeoutMs) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
+  return data as T;
+}
+
+export const fetchWifi = () => getJson<WifiStatus>("/api/wifi");
+export const scanWifi = () =>
+  getJson<{ networks: ScannedNetwork[] }>("/api/wifi/scan", SCAN_TIMEOUT_MS);

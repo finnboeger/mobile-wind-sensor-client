@@ -2,7 +2,7 @@
 Local dashboard served by the windbot itself.
 
 It shows the same wind data as the online dashboard without a trip through the
-internet and live values for debugging.
+internet, live values for debugging and the state of the Wi-Fi.
 """
 
 import threading
@@ -11,15 +11,22 @@ from collections.abc import Callable
 from aggregate import Second
 from config import NetworkConfig
 
-from . import history, server
+from . import history, server, wifi
 
 
 def init(network_config: NetworkConfig) -> Callable[[Second], None]:
-    """Start the dashboard webserver and return where the seconds go."""
+    """Start the Wi-Fi watcher and the webserver, return where the seconds go."""
+    wifi_manager = wifi.init(network_config)
+
     measurements = history.MeasurementHistory()
 
     def make_server(address: tuple[str, int], interface: str) -> server.DashboardServer:
-        return server.DashboardServer(address, measurements, interface)
+        return server.DashboardServer(
+            address,
+            measurements,
+            wifi_manager,
+            interface,
+        )
 
     # lo for e.g. curl on the Pi itself, whose own connections arrive on it
     for interface in ("lo", network_config.WIFI_INTERFACE):
