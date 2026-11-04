@@ -6,6 +6,8 @@ from typing import Literal, TypeVar
 
 logger = logging.getLogger(__name__)
 
+MAX_PORT = 65535
+
 
 @dataclass(frozen=True, kw_only=True)
 class SensorConfig:
@@ -171,11 +173,22 @@ class Config:
             AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
             AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),
         )
-        broker = get_optional(config, "MQTT", "BROKER", str)
-        self.MQTT = (
-            MQTTConfig(
+        broker = (get_optional(config, "MQTT", "BROKER", str) or "").strip()
+        mqtt_port = get(config, "MQTT", "PORT", str, "8883").strip()
+        if not broker:
+            logger.info("No MQTT broker configured, MQTT is disabled")
+            self.MQTT = None
+        elif not mqtt_port.isdigit() or not 1 <= int(mqtt_port) <= MAX_PORT:
+            logger.error(
+                "MQTT.PORT %r is not a port between 1 and %d, MQTT is disabled",
+                mqtt_port,
+                MAX_PORT,
+            )
+            self.MQTT = None
+        else:
+            self.MQTT = MQTTConfig(
                 BROKER=broker,
-                PORT=get(config, "MQTT", "PORT", int, 8883),
+                PORT=int(mqtt_port),
                 USE_TLS=get(config, "MQTT", "USE_TLS", parse_bool, True),
                 USERNAME=get_optional(config, "MQTT", "USERNAME", str),
                 PASSWORD=get_optional(config, "MQTT", "PASSWORD", str),
@@ -183,9 +196,6 @@ class Config:
                 TOPIC=get(config, "MQTT", "TOPIC", str),
                 QUEUE_SIZE=get(config, "MQTT", "QUEUE_SIZE", int, 5),
             )
-            if broker is not None
-            else None
-        )
         ports: list[GPSPort] = ["I2C", "UART1", "UART2", "USB", "SPI"]
         self.GPS = GPSConfig(
             SERIAL_PORT=get(config, "GPS", "SERIAL_PORT", str, "/dev/ttyACM0"),

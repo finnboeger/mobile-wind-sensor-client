@@ -6,6 +6,7 @@ so the two always agree.
 """
 
 import logging
+import threading
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -195,3 +196,25 @@ def run(
             seconds += aggregator.add_wind(wind)
         for second in seconds:
             on_second(second)
+
+
+def init(
+    position_queue: PositionQueue,
+    wind_queue: WindOutputQueue,
+    consumers: list[Callable[[Second], None]],
+) -> None:
+    """Start the thread that hands every finished second to each consumer."""
+
+    def on_second(second: Second) -> None:
+        for consumer in consumers:
+            try:
+                consumer(second)
+            except Exception:
+                # one failing consumer must not stop the others
+                logger.exception("Failed to handle second %d", second.timestamp_s)
+
+    threading.Thread(
+        target=run,
+        args=(position_queue, wind_queue, on_second),
+        daemon=True,
+    ).start()

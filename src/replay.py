@@ -30,6 +30,7 @@ import jsonpickle
 import n2k
 from pyubx2 import UBXMessage
 
+import aggregate
 import mqtt
 import wind
 from config import Config
@@ -342,9 +343,12 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
     mqtt_wind_queue: WindOutputQueue = Queue()
     mqtt_position_queue: Queue[PositionData] = Queue()
 
-    if "mqtt" in features:
+    # main() already checked that a broker is configured
+    mqtt_config = Config().MQTT if "mqtt" in features else None
+    if mqtt_config is not None:
         output_queues.append(mqtt_wind_queue)
-        mqtt.init(mqtt_position_queue, mqtt_wind_queue)
+        publish = mqtt.init(mqtt_config)
+        aggregate.init(mqtt_position_queue, mqtt_wind_queue, [publish])
 
     threading.Thread(
         target=wind.worker,
@@ -379,7 +383,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
         if evt.consumer == "position" and isinstance(evt.payload, PositionData):
             input_positions.append((evt.log_time, evt.payload))
             position_queue.put(evt.payload)
-            if "mqtt" in features:
+            if mqtt_config is not None:
                 mqtt_position_queue.put(evt.payload)
         elif evt.consumer == "heading" and isinstance(evt.payload, HeadingData):
             input_headings.append((evt.log_time, evt.payload))
@@ -669,13 +673,19 @@ def main() -> None:
 
     jump_time = _resolve_jump_time(events, args.jump)
 
+    features = [x.strip() for x in args.features.split(",")]
+    # checked before the TUI starts, a log line would garble it
+    if "mqtt" in features and Config().MQTT is None:
+        msg = "--features mqtt needs MQTT.BROKER and a valid MQTT.PORT in config.ini"
+        raise SystemExit(msg)
+
     curses.wrapper(
         run_tui,
         events=events,
         speed=float(args.speed),
         tail=int(args.tail),
         start_paused=bool(args.paused),
-        features=[x.strip() for x in args.features.split(",")],
+        features=features,
         jump_to=jump_time if args.jump is not None else None,
     )
 

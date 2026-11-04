@@ -1,7 +1,6 @@
 import json
 import math
 import socket
-import threading
 import time
 from queue import Queue
 from types import SimpleNamespace
@@ -95,16 +94,11 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
             TOPIC="test/topic",
         ),
     )
-    monkeypatch.setattr(mqtt, "Config", lambda: config)
     monkeypatch.setattr(mqtt, "connection_status", {"state": None, "error_count": 0})
 
     position_queue: Queue[PositionData] = Queue()
     wind_queue: Queue[tuple[CorrectedApparentWindData, TrueWindData]] = Queue()
-    threading.Thread(
-        target=mqtt.worker,
-        args=(position_queue, wind_queue),
-        daemon=True,
-    ).start()
+    aggregate.init(position_queue, wind_queue, [mqtt.init(config.MQTT)])
 
     # Let the first connection attempts fail before the broker appears
     time.sleep(1.5)
