@@ -32,6 +32,13 @@
             </div>
           </div>
           <div v-else>The Wi-Fi interface isn't available.</div>
+          <div v-if="wifi.ignore_known_networks" class="banner warn">
+            Ignoring known networks: the hotspot stays open and the internet goes over 4G
+            <template v-if="wifi.ignore_known_networks_for != null">
+              for another {{ Math.ceil(wifi.ignore_known_networks_for / 60) }} min,
+            </template>
+            until you stop this, join a network or restart the windbot.
+          </div>
           <div v-if="wifi.action" class="banner">{{ wifi.action }}…</div>
           <div v-if="wifi.message" class="banner">{{ wifi.message }}</div>
           <div v-if="wifi.error" class="banner bad">{{ wifi.error }}</div>
@@ -47,6 +54,18 @@
               @click="startHotspot"
             >
               Open hotspot now
+            </button>
+            <button
+              v-if="wifi.mode !== 'unavailable'"
+              class="btn"
+              :disabled="busy"
+              @click="toggleIgnoreKnownNetworks"
+            >
+              {{
+                wifi.ignore_known_networks
+                  ? "Stop ignoring known networks"
+                  : "Ignore known networks (test 4G)"
+              }}
             </button>
           </div>
         </template>

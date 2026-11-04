@@ -98,6 +98,32 @@ export default defineComponent({
       );
     }
 
+    function toggleIgnoreKnownNetworks(): void {
+      const current = wifi.value;
+      if (current?.ignore_known_networks) {
+        void wifiAction(
+          "/api/wifi/ignore-known-networks",
+          { enabled: false },
+          "The windbot closes the hotspot and joins a known network in reach.\n\n" +
+            `${LOSE_CONNECTION}\n\nContinue?`,
+        );
+      } else {
+        const disabled = current?.hotspot_enabled
+          ? ""
+          : "The automatic hotspot is turned off (ENABLE_HOTSPOT in config.ini), " +
+            "but this opens it anyway.\n\n";
+        void wifiAction(
+          "/api/wifi/ignore-known-networks",
+          { enabled: true },
+          current?.mode === "hotspot"
+            ? null
+            : `${disabled}The windbot leaves ${current?.ssid ?? "the current network"}, opens ` +
+                `the hotspot "${current?.hotspot_ssid}" and uses 4G for the internet for an ` +
+                "hour. Continue?",
+        );
+      }
+    }
+
     function connectTo(network: KnownNetwork): void {
       void wifiAction(
         "/api/wifi/connect",
@@ -187,6 +213,7 @@ export default defineComponent({
       busy,
       stopHotspot,
       startHotspot,
+      toggleIgnoreKnownNetworks,
       connectTo,
       deleteNetwork,
       form,

@@ -264,3 +264,12 @@ def test_save_network_checks_the_request(
 
     assert save(priority=3, hidden=False)[0] == 200
     assert save(ssid="Cafe", password=None, open=True)[0] == 200
+
+
+def test_ignore_known_networks_needs_a_boolean(server: DashboardServer) -> None:
+    headers = {"Content-Type": "application/json", "X-Admin-Password": "secret"}
+    path = "/api/wifi/ignore-known-networks"
+    status, _ = request(server, path, {"enabled": "yes"}, headers)
+    assert status == 400
+    status, _ = request(server, path, {"enabled": True}, headers)
+    assert status == 503  # valid, but no Wi-Fi in the tests
