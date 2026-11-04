@@ -9,12 +9,13 @@ from pathlib import Path
 
 import pytest
 
+import dashboard.server
+import telemetry
 from dashboard.history import MeasurementHistory
 from dashboard.server import (
     DashboardHandler,
     DashboardServer,
     InterfaceServer,
-    _finite,
 )
 from tests.test_dashboard_history import second
 
@@ -100,9 +101,17 @@ def test_measurements_limit(server: DashboardServer) -> None:
         assert status == 400
 
 
-def test_finite_replaces_nan() -> None:
-    data = {"a": [1.0, float("nan")], "b": float("inf"), "c": "x"}
-    assert _finite(data) == {"a": [1.0, None], "b": None, "c": "x"}
+def test_status_replaces_nan(
+    server: DashboardServer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # without a config.ini there is no MQTT configuration to read
+    monkeypatch.setattr(dashboard.server, "mqtt_status", lambda: {"enabled": False})
+    telemetry.update("gps", speed=float("nan"), satellites=7)
+    status, data = request(server, "/api/status")
+    assert status == 200
+    assert data["values"]["gps"]["speed"] is None
+    assert data["values"]["gps"]["satellites"] == 7
 
 
 def test_not_found(server: DashboardServer) -> None:

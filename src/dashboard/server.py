@@ -7,6 +7,7 @@ releases). It polls the JSON endpoints below.
 
 - ``GET /api/measurements?since=<ms>&limit=<n>``: one second records, see
   ``history.py``. ``limit`` keeps only the newest ``n`` of them.
+- ``GET /api/status``: live values of the pipeline and the system
 """
 
 import gzip
@@ -14,8 +15,11 @@ import json
 import logging
 import math
 import mimetypes
+import os
 import re
+import shutil
 import socket
+import subprocess  # nosec B404
 import threading
 import time
 from collections.abc import Callable
@@ -25,6 +29,11 @@ from pathlib import Path
 from typing import Any, Final, cast
 from urllib.parse import parse_qs, urlparse
 
+import mqtt
+import telemetry
+from config import Config
+
+from . import commands
 from .history import MeasurementHistory
 
 logger = logging.getLogger(__name__)
@@ -40,6 +49,118 @@ npm run build</code> in <code>src/dashboard/web</code>, or install a release.</p
 """
 #: seconds between checks whether the Wi-Fi interface appeared or changed
 INTERFACE_POLL_S: Final = 5
+
+
+#: seconds the slower system values are cached
+SYSTEM_CACHE_SECONDS = 5
+
+
+def _read_first_line(path: str) -> str | None:
+    try:
+        with Path(path).open(encoding="utf-8") as file:
+            return file.readline().strip()
+    except OSError:
+        return None
+
+
+def _command(*args: str) -> str | None:
+    try:
+        result = commands.run(list(args), timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+class SystemInfo:
+    """Cached state of the Pi: load, temperature, memory and network interfaces."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._time = 0.0
+        self._slow: dict[str, Any] = {
+            "interfaces": [],
+            "throttled": None,
+            "disk_free_mb": None,
+            "disk_total_mb": None,
+        }
+
+    def _slow_values(self) -> dict[str, Any]:
+        if time.monotonic() - self._time < SYSTEM_CACHE_SECONDS:
+            return self._slow
+        # The commands can take seconds on a busy Pi. While one request refreshes
+        # the values, the others answer with the previous ones instead of waiting.
+        if not self._lock.acquire(blocking=False):
+            return self._slow
+        try:
+            interfaces = []
+            output = _command("ip", "-j", "-4", "address", "show")
+            if output:
+                try:
+                    for interface in json.loads(output):
+                        if interface.get("ifname") == "lo":
+                            continue
+                        interfaces.append(
+                            {
+                                "name": interface.get("ifname"),
+                                "up": "UP" in interface.get("flags", []),
+                                "addresses": [
+                                    a.get("local")
+                                    for a in interface.get("addr_info", [])
+                                ],
+                            },
+                        )
+                except ValueError:
+                    pass
+            throttled = _command("vcgencmd", "get_throttled")
+            disk = shutil.disk_usage(Path.cwd())
+            self._slow = {
+                "interfaces": interfaces,
+                "throttled": throttled.strip().partition("=")[2] if throttled else None,
+                "disk_free_mb": disk.free // 1_000_000,
+                "disk_total_mb": disk.total // 1_000_000,
+            }
+            self._time = time.monotonic()
+            return self._slow
+        finally:
+            self._lock.release()
+
+    def values(self) -> dict[str, Any]:
+        uptime = _read_first_line("/proc/uptime")
+        temperature = _read_first_line("/sys/class/thermal/thermal_zone0/temp")
+        memory: dict[str, int] = {}
+        try:
+            with Path("/proc/meminfo").open(encoding="utf-8") as file:
+                for line in file:
+                    key, _, value = line.partition(":")
+                    if key in ("MemTotal", "MemAvailable"):
+                        memory[key] = int(value.split()[0]) // 1000
+        except (OSError, ValueError):
+            pass
+        try:
+            load = os.getloadavg()[0]
+        except OSError:
+            load = None
+        return {
+            "uptime": float(uptime.split()[0]) if uptime else None,
+            "load": load,
+            "cpu_temperature": int(temperature) / 1000 if temperature else None,
+            "memory_total_mb": memory.get("MemTotal"),
+            "memory_available_mb": memory.get("MemAvailable"),
+            **self._slow_values(),
+        }
+
+
+def mqtt_status() -> dict[str, Any]:
+    """Return the MQTT connection state, if the MQTT worker is running."""
+    config = Config()
+    if config.MQTT is None:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "broker": config.MQTT.BROKER,
+        "topic": config.MQTT.TOPIC,
+        **mqtt.connection_status,
+    }
 
 
 def _finite(data: object) -> object:
@@ -72,6 +193,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.gzipped: dict[str, bytes] = {}
         super().__init__(address, DashboardHandler)
         self.history = history
+        self.system = SystemInfo()
 
     def server_bind(self) -> None:
         if self.interface:
@@ -141,6 +263,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/": self._get_index,
             "/index.html": self._get_index,
             "/api/measurements": self._get_measurements,
+            "/api/status": self._get_status,
         }
         self._dispatch(routes.get(url.path), parse_qs(url.query))
 
@@ -202,6 +325,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         server_time = int(time.time() * 1000)
         body = f'{{"server_time":{server_time},"items":{items}}}'.encode()
         self._send(HTTPStatus.OK, body, "application/json")
+
+    def _get_status(self, _: object) -> None:
+        self._json(
+            {
+                "server_time": int(time.time() * 1000),
+                "values": telemetry.snapshot(),
+                "mqtt": mqtt_status(),
+                "system": self.dashboard.system.values(),
+            },
+        )
 
 
 def serve(server: DashboardServer) -> None:

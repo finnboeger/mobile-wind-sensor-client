@@ -7,7 +7,7 @@ import {
   ref,
   watch,
 } from "vue";
-import { fetchMeasurements, type Measurement as LocalMeasurement } from "./api";
+import { fetchMeasurements, type Measurement as LocalMeasurement } from "../api";
 import { LineChart } from "echarts/charts";
 import {
   GridComponent,

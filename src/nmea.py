@@ -5,6 +5,7 @@ import can
 import n2k
 
 import log
+import telemetry
 from structs import (
     ApparentWindData,
     HeadingData,
@@ -89,6 +90,13 @@ class Handler(n2k.MessageHandler):
             )
             self.heading_queue.put(heading_data)
             log.data("heading", heading_data)
+            # published here rather than in the wind worker, which only looks at
+            # the headings when apparent wind arrives
+            telemetry.update(
+                "heading",
+                heading=math.degrees(heading_data.heading),
+                timestamp=heading_data.timestamp,
+            )
 
 
 def forward_position(
