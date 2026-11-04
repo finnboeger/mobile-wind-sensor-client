@@ -8,7 +8,12 @@ from collections.abc import Iterator
 import pytest
 
 from dashboard.history import MeasurementHistory
-from dashboard.server import DashboardHandler, DashboardServer, _finite
+from dashboard.server import (
+    DashboardHandler,
+    DashboardServer,
+    InterfaceServer,
+    _finite,
+)
 from tests.test_dashboard_history import second
 
 
@@ -72,3 +77,49 @@ def test_idle_connections_are_closed(
         conn.settimeout(5)
         # an idle client that never sends a request is disconnected by the server
         assert conn.recv(1) == b""
+
+
+def test_interface_server_follows_the_interface() -> None:
+    indexes: list[int | None] = [None]
+
+    def if_index(name: str) -> int:
+        assert name == "wlan0"
+        if indexes[-1] is None:
+            raise OSError(name)
+        return indexes[-1]
+
+    history = MeasurementHistory()
+    history.add_second(second(1))
+    interfaces: list[str] = []
+
+    def make_server(_address: tuple[str, int], interface: str) -> DashboardServer:
+        # Without SO_BINDTODEVICE, which only Linux has, so the test runs anywhere
+        interfaces.append(interface)
+        return DashboardServer(("127.0.0.1", 0), history)
+
+    watcher = InterfaceServer("wlan0", 0, make_server, if_index)
+    try:
+        watcher.check()
+        assert watcher.server is None  # stays closed without the interface
+
+        indexes.append(1)
+        watcher.check()
+        first = watcher.server
+        assert first is not None
+        assert request(first, "/api/measurements")[0] == 200
+        watcher.check()
+        assert watcher.server is first
+
+        indexes.append(7)  # the interface came back with a new index
+        watcher.check()
+        assert watcher.server is not None
+        assert watcher.server is not first
+        assert request(watcher.server, "/api/measurements")[0] == 200
+
+        indexes.append(None)
+        watcher.check()
+        assert watcher.server is None
+        assert interfaces == ["wlan0", "wlan0"]
+    finally:
+        indexes.append(None)
+        watcher.check()
