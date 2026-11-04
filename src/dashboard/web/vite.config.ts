@@ -11,6 +11,8 @@ export default defineConfig({
     // served by src/dashboard/server.py, gitignored and shipped in the releases
     outDir: "../static",
     emptyOutDir: true,
+    // ECharts alone is about 500 kB, served gzipped by the windbot
+    chunkSizeWarningLimit: 800,
   },
   server: {
     proxy: { "/api": windbot },

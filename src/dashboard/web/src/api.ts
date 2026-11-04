@@ -1,10 +1,10 @@
 /** One second record of /api/measurements, see src/dashboard/history.py */
 export interface Measurement {
   ts: number;
-  true_wind_speed_mps: number | null;
-  true_wind_dir_deg: number | null;
-  apparent_wind_speed_mps: number | null;
-  apparent_wind_dir_deg: number | null;
+  true_wind_speed_mps: number;
+  true_wind_dir_deg: number;
+  apparent_wind_speed_mps: number;
+  apparent_wind_dir_deg: number;
   sensor_speed_mps?: number | null;
   sensor_heading_deg?: number | null;
   gps_lat?: number | null;
