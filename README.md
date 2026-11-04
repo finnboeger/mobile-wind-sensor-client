@@ -15,6 +15,59 @@ Replay with a terminal UI:
 
 Controls: `space` play/pause, `n` step (paused), `+/-` change speed, `q` quit.
 
+## Local dashboard and hotspot
+
+The windbot serves its own dashboard (`src/dashboard`), so the wind can be watched
+on a phone without a trip through the internet, e.g. when there is no 4G.
+It is enabled with `NETWORK.ENABLE_LOCAL_WEBSERVER` and listens on
+`NETWORK.WEBSERVER_PORT` (80) on every interface.
+
+- **Wind** shows the same values and charts as the online dashboard, from one second
+  averages kept in memory for two hours. The settings are stored in the browser like
+  online.
+- **Live** shows the latest inputs for debugging: apparent wind, heading, GPS fix,
+  what the true wind is waiting for, MQTT, network interfaces and the Pi's load,
+  temperature and memory.
+  Other modules can add a card by publishing values with `telemetry.update(...)`.
+- **Wi-Fi** shows the connection, lets you add, edit, forget and connect to networks,
+  and turn the hotspot on or off without a restart.
+
+When the Wi-Fi isn't connected to a known network, the windbot opens an access point
+(`NETWORK.AP_SSID` / `AP_PASSWORD`; `setup.sh` names it `WindSensor-XXXX` after the
+end of the Pi's serial number, and generates the password and prints it). If
+`AP_PASSWORD` isn't empty but has fewer than 8 or more than 63 characters, the access
+point stays closed and the Wi-Fi tab shows why.
+Connect to it and open
+http://10.42.0.1 (or http://windbot.lan). The access point doesn't share the windbot's
+internet connection.
+
+- After startup it waits `AP_STARTUP_DELAY_SECONDS` (60) for a known network.
+- If the network drops, NetworkManager keeps trying to reconnect, and the access point
+  opens again after `AP_FALLBACK_DELAY_SECONDS` (180) without a connection.
+- While no device uses the access point (none active in the last minute), the windbot
+  closes it every 15 minutes to look for a known network, e.g. a phone hotspot
+  switched on as a backup, and opens it again if none connects.
+- *Turn off hotspot* closes the access point and joins the known network in reach with
+  the highest priority. If none connects, the access point opens again after the
+  fallback delay.
+- *Connect* on a known network switches to it. If that fails, the access point opens
+  again right away and the dashboard shows the error.
+- *Ignore known networks (test 4G)* opens the access point right away and keeps it
+  open even when a known network is in reach, so the internet connection goes over the
+  4G modem. It lasts for an hour, or until you stop it, connect to a network,
+  or the windbot restarts. If the access point can't be opened, it ends right away.
+- `NETWORK.ADMIN_PASSWORD` is required for Wi-Fi changes, e.g. when the windbot joins
+  a shared network. `setup.sh` generates it; without it anyone who can reach
+  the dashboard can change the Wi-Fi, and the windbot logs a warning.
+
+The Wi-Fi management uses NetworkManager (`nmcli`) and needs root, which the
+`windbot` service has. `scripts/setup-hotspot.sh` prepares the Pi: it installs
+`dnsmasq-base`, `iw` and `nftables`, adds the `windbot.lan` name and blocks forwarding
+from the access point with a service that loads the rules at boot. The windbot
+doesn't open the access point without that block, and closes it if the block
+disappears while it is open. The post-first-boot script and
+`update.sh` run it; on a git checkout run `sudo ./scripts/setup-hotspot.sh` once.
+
 ## Bill of Materials
 TODO
 
