@@ -5,6 +5,7 @@ from collections.abc import Callable
 from queue import Queue
 
 import aggregate
+import dashboard
 import gps
 import mqtt
 import nmea
@@ -72,6 +73,10 @@ if __name__ == "__main__":
     mqtt_config = Config().MQTT
     if mqtt_config is not None:
         second_consumers.append(mqtt.init(mqtt_config))
+
+    network_config = Config().NETWORK
+    if network_config.ENABLE_LOCAL_WEBSERVER:
+        second_consumers.append(dashboard.init(network_config))
 
     if second_consumers:
         aggregate_position_queue: PositionQueue = Queue()

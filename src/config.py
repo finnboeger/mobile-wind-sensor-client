@@ -9,6 +9,15 @@ logger = logging.getLogger(__name__)
 MAX_PORT = 65535
 
 
+def parse_port(value: str, option: str) -> int | None:
+    """Return the TCP port in ``value``, or log an error and return None."""
+    value = value.strip()
+    if not value.isdigit() or not 1 <= int(value) <= MAX_PORT:
+        logger.error("%s %r is not a port between 1 and %d", option, value, MAX_PORT)
+        return None
+    return int(value)
+
+
 @dataclass(frozen=True, kw_only=True)
 class SensorConfig:
     COMPASS_OFFSET_DEGREES: float
@@ -28,6 +37,8 @@ class LoggingConfig:
 class NetworkConfig:
     INTERFACE_PRIORITY: list[str]
     ENABLE_LOCAL_WEBSERVER: bool
+    #: TCP port of the local dashboard
+    WEBSERVER_PORT: int
     AP_SSID: str | None
     AP_PASSWORD: str | None
 
@@ -151,6 +162,18 @@ class Config:
             DATA_LOG_DIR=get_optional(config, "LOGGING", "DATA_LOG_DIR", str),
             MAX_DATA_LOG_SIZE=get(config, "LOGGING", "MAX_DATA_LOG_SIZE", int, 100_000),
         )
+        webserver_port = parse_port(
+            get(config, "NETWORK", "WEBSERVER_PORT", str, "80"),
+            "NETWORK.WEBSERVER_PORT",
+        )
+        # without a valid port the dashboard is disabled instead of crashing on start
+        enable_webserver = webserver_port is not None and get(
+            config,
+            "NETWORK",
+            "ENABLE_LOCAL_WEBSERVER",
+            parse_bool,
+            fallback=True,
+        )
         self.NETWORK = NetworkConfig(
             INTERFACE_PRIORITY=[
                 interface.strip()
@@ -163,13 +186,8 @@ class Config:
                 ).split(",")
                 if interface.strip() != ""
             ],
-            ENABLE_LOCAL_WEBSERVER=get(
-                config,
-                "NETWORK",
-                "ENABLE_LOCAL_WEBSERVER",
-                parse_bool,
-                fallback=False,
-            ),
+            ENABLE_LOCAL_WEBSERVER=enable_webserver,
+            WEBSERVER_PORT=webserver_port or 80,
             AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
             AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),
         )
