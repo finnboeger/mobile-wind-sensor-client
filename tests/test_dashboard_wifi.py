@@ -540,3 +540,70 @@ def test_hotspot_stations_parses_inactive_times(
     )
     manager = WifiManager(CONFIG, run=FakeNetworkManager(), clock=Clock())
     assert manager.hotspot_stations() == [304, 120000, 0]
+
+
+def test_save_network_adds_and_validates() -> None:
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.save_network("Club", "secret123", 3)
+    assert {"name": "Club", "ssid": "Club", "priority": 3} in nm.connections.values()
+
+    with pytest.raises(WifiError):
+        manager.save_network("Club", "short")
+    with pytest.raises(WifiError):
+        manager.save_network("", "secret123")
+
+
+def test_save_network_updates_existing_ssid() -> None:
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.save_network("Home", None, 9)
+    modify = nm.commands[-1]
+    assert modify[:4] == ["connection", "modify", "uuid", "u-home"]
+    assert "wifi-sec.psk" not in modify
+    assert modify[modify.index("connection.autoconnect-priority") + 1] == "9"
+
+
+def test_delete_network() -> None:
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.delete_network("u-marina")
+    assert "u-marina" not in nm.connections
+    with pytest.raises(WifiError):
+        manager.delete_network("u-marina")
+
+
+def test_new_network_needs_a_password_unless_open() -> None:
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    for password in (None, ""):
+        with pytest.raises(WifiRequestError):
+            manager.save_network("Phone", password)
+    assert "u-Phone" not in nm.connections
+
+    manager.save_network("Cafe", None, open_network=True)
+    add = nm.commands[-1]
+    assert add[:2] == ["connection", "add"]
+    assert "wifi-sec.psk" not in add
+
+
+def test_network_priority_range() -> None:
+    manager = WifiManager(CONFIG, run=FakeNetworkManager(), clock=Clock())
+    with pytest.raises(WifiRequestError):
+        manager.save_network("Phone", "secret123", 1000)
+
+
+def test_network_changes_wait_for_other_changes() -> None:
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager._action_lock.acquire()  # noqa: SLF001 - e.g. a connect in progress
+    try:
+        with pytest.raises(WifiBusyError):
+            manager.save_network("Phone", "secret123")
+        with pytest.raises(WifiBusyError):
+            manager.delete_network("u-marina")
+    finally:
+        manager._action_lock.release()  # noqa: SLF001
+    assert "u-marina" in nm.connections
+    manager.delete_network("u-marina")
+    assert "u-marina" not in nm.connections

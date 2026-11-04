@@ -17,7 +17,9 @@ from dashboard.server import (
     DashboardServer,
     InterfaceServer,
 )
+from dashboard.wifi import WifiManager
 from tests.test_dashboard_history import second
+from tests.test_dashboard_wifi import CONFIG, Clock, FakeNetworkManager
 
 
 @pytest.fixture
@@ -228,3 +230,37 @@ def test_interface_server_follows_the_interface() -> None:
     finally:
         indexes.append(None)
         watcher.check()
+
+
+@pytest.fixture
+def wifi_server() -> Iterator[tuple[DashboardServer, FakeNetworkManager]]:
+    nm = FakeNetworkManager()
+    wifi = WifiManager(CONFIG, run=nm, clock=Clock())
+    dashboard = DashboardServer(("127.0.0.1", 0), MeasurementHistory(), wifi, "secret")
+    thread = threading.Thread(target=dashboard.serve_forever, daemon=True)
+    thread.start()
+    yield dashboard, nm
+    dashboard.shutdown()
+    dashboard.server_close()
+
+
+def test_save_network_checks_the_request(
+    wifi_server: tuple[DashboardServer, FakeNetworkManager],
+) -> None:
+    server, nm = wifi_server
+    headers = {"Content-Type": "application/json", "X-Admin-Password": "secret"}
+
+    def save(**fields: object) -> tuple[int, dict]:
+        body = {"ssid": "Phone", "password": "secret123", **fields}
+        return request(server, "/api/wifi/networks", body, headers)
+
+    assert save(priority=5000)[0] == 400
+    assert save(priority=True)[0] == 400
+    assert save(hidden="false")[0] == 400
+    status, data = save(password="")  # nosec B106
+    assert status == 400
+    assert "password" in data["error"]
+    assert not any(c[:2] == ["connection", "add"] for c in nm.commands)
+
+    assert save(priority=3, hidden=False)[0] == 200
+    assert save(ssid="Cafe", password=None, open=True)[0] == 200

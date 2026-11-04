@@ -74,6 +74,14 @@
                 >
                   Connect
                 </button>
+                {{ " " }}
+                <button class="btn small" :disabled="busy" @click="editNetwork(network)">
+                  Edit
+                </button>
+                {{ " " }}
+                <button class="btn small danger" :disabled="busy" @click="deleteNetwork(network)">
+                  Delete
+                </button>
               </td>
             </tr>
             <tr v-if="wifi && wifi.networks.length === 0">
@@ -95,7 +103,12 @@
           <li v-else-if="scanned === null" class="muted">Press Scan to look for networks.</li>
           <li v-else-if="scanned.length === 0" class="muted">No networks found.</li>
           <template v-else>
-            <li v-for="network in scanned" :key="network.ssid">
+            <li
+              v-for="network in scanned"
+              :key="network.ssid"
+              class="pickable"
+              @click="pickScanned(network)"
+            >
               <span>
                 {{ network.ssid }}
                 <span v-if="network.in_use" class="badge good">connected</span>
@@ -104,6 +117,65 @@
             </li>
           </template>
         </ul>
+      </section>
+
+      <section class="card">
+        <h2>{{ form.uuid ? `Edit ${form.ssid}` : "Add network" }}</h2>
+        <form autocomplete="off" @submit.prevent="saveNetwork">
+          <div class="row">
+            <label for="nf-ssid">Network name (SSID)</label>
+            <input
+              id="nf-ssid"
+              ref="ssidInput"
+              v-model="form.ssid"
+              type="text"
+              list="scan-ssids"
+              required
+              maxlength="32"
+            />
+            <datalist id="scan-ssids">
+              <option v-for="network in scanned ?? []" :key="network.ssid" :value="network.ssid" />
+            </datalist>
+          </div>
+          <div class="row">
+            <label for="nf-password">Password</label>
+            <input
+              id="nf-password"
+              ref="passwordInput"
+              v-model="form.password"
+              type="password"
+              maxlength="63"
+              minlength="8"
+              :required="!form.uuid && !form.open"
+              :disabled="form.open"
+              :placeholder="form.uuid ? 'unchanged' : ''"
+            />
+            <small class="muted">
+              For a phone hotspot, set its security to WPA2 or WPA2/WPA3. WPA3 alone doesn't
+              work.
+            </small>
+          </div>
+          <div class="row inline">
+            <input id="nf-open" v-model="form.open" type="checkbox" />
+            <label for="nf-open">Open network without password</label>
+          </div>
+          <div class="row">
+            <label for="nf-priority">Priority (higher is preferred)</label>
+            <input id="nf-priority" v-model.number="form.priority" type="number" step="1" />
+          </div>
+          <div class="row inline">
+            <input id="nf-autoconnect" v-model="form.autoconnect" type="checkbox" />
+            <label for="nf-autoconnect">Join automatically</label>
+          </div>
+          <div class="row inline">
+            <input id="nf-hidden" v-model="form.hidden" type="checkbox" />
+            <label for="nf-hidden">Hidden network</label>
+          </div>
+          <div class="actions">
+            <button class="btn primary" type="submit" :disabled="busy">Save</button>
+            <button v-if="form.uuid" class="btn" type="button" @click="resetForm">Cancel</button>
+          </div>
+        </form>
       </section>
     </div>
   </main>
@@ -133,6 +205,32 @@
   list-style: none;
   max-height: 260px;
   overflow-y: auto;
+}
+.pickable {
+  cursor: pointer;
+}
+.pickable:hover {
+  background: #f4f5f7;
+}
+form .row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+form .row.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+input[type="text"],
+input[type="password"],
+input[type="number"] {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #ccc;
+  font-size: 1rem;
+  width: 100%;
 }
 .scan-list li {
   display: flex;

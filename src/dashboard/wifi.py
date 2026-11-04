@@ -20,7 +20,7 @@ import shutil
 import subprocess  # nosec B404
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,6 +69,9 @@ WIFI_TYPE = "802-11-wireless"
 MAX_SSID_LENGTH = 32
 MIN_PSK_LENGTH = 8
 MAX_PSK_LENGTH = 63
+#: range of NetworkManager's connection.autoconnect-priority
+MIN_PRIORITY = -999
+MAX_PRIORITY = 999
 
 
 class WifiError(Exception):
@@ -895,6 +898,121 @@ class WifiManager:
             )
 
         self._in_background("Closing the hotspot", action)
+
+    @contextlib.contextmanager
+    def _changing_networks(self) -> Iterator[None]:
+        """Hold the action lock while a request changes the known networks."""
+        if not self._action_lock.acquire(blocking=False):
+            msg = "Another Wi-Fi change is still running."
+            raise WifiBusyError(msg)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._networks_time = None
+            self._action_lock.release()
+
+    def save_network(  # noqa: PLR0913
+        self,
+        ssid: str,
+        password: str | None,
+        priority: int = 0,
+        *,
+        open_network: bool = False,
+        autoconnect: bool = True,
+        hidden: bool = False,
+        uuid: str | None = None,
+    ) -> None:
+        """
+        Add a network, or change a known one.
+
+        :param password: new password, None or empty keeps the current one of a known
+            network; a new network needs one unless ``open_network``
+        :param open_network: save it without a password, also removing a known one
+        :param uuid: the known network to change, None to add (or replace) by SSID
+        """
+        validate_ssid(ssid)
+        if not MIN_PRIORITY <= priority <= MAX_PRIORITY:
+            msg = f"The priority needs to be from {MIN_PRIORITY} to {MAX_PRIORITY}."
+            raise WifiRequestError(msg)
+        if open_network or not password:
+            password = None
+        else:
+            validate_password(password)
+        with self._changing_networks():
+            if uuid is None:
+                uuid = next(
+                    (n["uuid"] for n in self.known_networks() if n["ssid"] == ssid),
+                    None,
+                )
+            if uuid is None and password is None and not open_network:
+                msg = "A new network needs a password, unless it is an open network."
+                raise WifiRequestError(msg)
+            self._save_network(
+                uuid,
+                ssid,
+                password,
+                [
+                    "connection.autoconnect",
+                    "yes" if autoconnect else "no",
+                    "connection.autoconnect-priority",
+                    str(priority),
+                    "802-11-wireless.hidden",
+                    "yes" if hidden else "no",
+                ],
+                open_network=open_network,
+            )
+
+    def _save_network(
+        self,
+        uuid: str | None,
+        ssid: str,
+        password: str | None,
+        settings: list[str],
+        *,
+        open_network: bool,
+    ) -> None:
+        if password:
+            settings = [
+                *settings,
+                "wifi-sec.key-mgmt",
+                "wpa-psk",
+                "wifi-sec.psk",
+                password,
+            ]
+        if uuid is None:
+            self.nmcli(
+                "connection",
+                "add",
+                "type",
+                "wifi",
+                "ifname",
+                self.interface,
+                "con-name",
+                ssid,
+                "ssid",
+                ssid,
+                *settings,
+            )
+            return
+        if open_network:
+            # remove the security settings to make it an open network
+            self.nmcli(
+                "connection",
+                "modify",
+                "uuid",
+                uuid,
+                "remove",
+                "802-11-wireless-security",
+            )
+        self.nmcli("connection", "modify", "uuid", uuid, "ssid", ssid, *settings)
+
+    def delete_network(self, uuid: str) -> None:
+        with self._changing_networks():
+            if not any(n["uuid"] == uuid for n in self.known_networks()):
+                msg = "Unknown network."
+                raise WifiRequestError(msg)
+            self.nmcli("connection", "delete", "uuid", uuid)
 
 
 def init(network_config: NetworkConfig) -> WifiManager | None:
