@@ -2,7 +2,8 @@
 Local dashboard served by the windbot itself.
 
 It shows the same wind data as the online dashboard without a trip through the
-internet, live values for debugging and the state of the Wi-Fi.
+internet, live values for debugging, and the state of the Wi-Fi, which can be
+changed there.
 """
 
 import threading
@@ -25,6 +26,7 @@ def init(network_config: NetworkConfig) -> Callable[[Second], None]:
             address,
             measurements,
             wifi_manager,
+            network_config.ADMIN_PASSWORD,
             interface,
         )
 

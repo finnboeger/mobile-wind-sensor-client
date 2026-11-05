@@ -9,9 +9,11 @@ releases). It polls the JSON endpoints below.
   ``history.py``. ``limit`` keeps only the newest ``n`` of them.
 - ``GET /api/status``: live values of the pipeline and the system
 - ``GET /api/wifi``, ``GET /api/wifi/scan``: Wi-Fi status and networks in reach
+- ``POST /api/wifi/...``: Wi-Fi changes, see ``do_POST``
 """
 
 import gzip
+import hmac
 import json
 import logging
 import math
@@ -36,11 +38,18 @@ from config import Config
 
 from . import commands
 from .history import MeasurementHistory
-from .wifi import WifiError, WifiManager
+from .wifi import WifiBusyError, WifiError, WifiManager, WifiRequestError
 
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+#: largest accepted request body in bytes
+MAX_BODY_SIZE = 4096
+# Delay before a wrong admin password is rejected. Passwords are checked one at a
+# time, and requests meanwhile get 429 right away, so guessing is limited to about one
+# try per second without parallel attempts piling up waiting threads.
+WRONG_PASSWORD_DELAY_SECONDS = 1.0
+_password_check_lock = threading.Lock()
 #: names of the built files in ``static/assets``, which contain a content hash
 ASSET_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 NOT_BUILT_PAGE = b"""<!DOCTYPE html>
@@ -179,11 +188,12 @@ def _finite(data: object) -> object:
 class DashboardServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         address: tuple[str, int],
         history: MeasurementHistory,
         wifi: WifiManager | None,
+        admin_password: str | None,
         interface: str | None = None,
         static_dir: Path = STATIC_DIR,
     ) -> None:
@@ -197,6 +207,7 @@ class DashboardServer(ThreadingHTTPServer):
         super().__init__(address, DashboardHandler)
         self.history = history
         self.wifi = wifi
+        self.admin_password = admin_password
         self.system = SystemInfo()
 
     def server_bind(self) -> None:
@@ -261,6 +272,41 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
         return self.dashboard.wifi
 
+    def _read_json(self) -> dict[str, Any]:
+        content_type = self.headers.get("Content-Type", "")
+        # Requiring JSON stops other websites from posting plain forms to this API
+        if not content_type.startswith("application/json"):
+            raise RequestError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "Expected JSON.")
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY_SIZE:
+            raise RequestError(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, "Too large.")
+        try:
+            data = json.loads(self.rfile.read(length) or b"{}")
+        except ValueError as e:
+            raise RequestError(HTTPStatus.BAD_REQUEST, "Invalid JSON.") from e
+        if not isinstance(data, dict):
+            raise RequestError(HTTPStatus.BAD_REQUEST, "Expected a JSON object.")
+        return data
+
+    def _check_admin(self) -> None:
+        password = self.dashboard.admin_password
+        if password is None:
+            return
+        given = self.headers.get("X-Admin-Password", "")
+        # Taken before comparing, so while a wrong password is answered every other
+        # attempt gets 429, right or wrong, and the answer reveals nothing
+        if not _password_check_lock.acquire(blocking=False):
+            raise RequestError(
+                HTTPStatus.TOO_MANY_REQUESTS,
+                "Too many wrong passwords, try again in a second.",
+            )
+        try:
+            if not hmac.compare_digest(given.encode(), password.encode()):
+                time.sleep(WRONG_PASSWORD_DELAY_SECONDS)
+                raise RequestError(HTTPStatus.UNAUTHORIZED, "Wrong admin password.")
+        finally:
+            _password_check_lock.release()
+
     # ----------------------------------------------------------------- routes
 
     def do_HEAD(self) -> None:  # noqa: N802
@@ -281,6 +327,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         }
         self._dispatch(routes.get(url.path), parse_qs(url.query))
 
+    def do_POST(self) -> None:  # noqa: N802
+        routes: dict[str, Callable[[dict[str, Any]], None]] = {
+            "/api/wifi/connect": self._post_connect,
+        }
+        route = routes.get(urlparse(self.path).path)
+
+        def handle(_: object) -> None:
+            if route is None:
+                raise RequestError(HTTPStatus.NOT_FOUND, "Not found.")
+            data = self._read_json()
+            self._check_admin()
+            route(data)
+
+        self._dispatch(handle, None)
+
     def _dispatch(self, route: Callable[[Any], None] | None, argument: object) -> None:
         if route is None:
             self._json({"error": "Not found."}, HTTPStatus.NOT_FOUND)
@@ -289,6 +350,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             route(argument)
         except RequestError as e:
             self._json({"error": e.message}, e.status)
+        except WifiRequestError as e:
+            self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+        except WifiBusyError as e:
+            self._json({"error": str(e)}, HTTPStatus.CONFLICT)
         except WifiError as e:
             # NetworkManager failed, not the request
             self._json({"error": str(e)}, HTTPStatus.BAD_GATEWAY)
@@ -350,14 +415,24 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "values": telemetry.snapshot(),
                 "mqtt": mqtt_status(),
                 "system": self.dashboard.system.values(),
+                "admin_password_required": self.dashboard.admin_password is not None,
             },
         )
 
     def _get_wifi(self, _: object) -> None:
-        self._json(self._wifi().status())
+        self._json(
+            {
+                **self._wifi().status(),
+                "admin_password_required": self.dashboard.admin_password is not None,
+            },
+        )
 
     def _get_scan(self, _: object) -> None:
         self._json({"networks": self._wifi().scan()})
+
+    def _post_connect(self, data: dict[str, Any]) -> None:
+        self._wifi().connect(str(data.get("uuid", "")))
+        self._json({"ok": True}, HTTPStatus.ACCEPTED)
 
 
 def serve(server: DashboardServer) -> None:

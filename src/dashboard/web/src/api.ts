@@ -86,6 +86,10 @@ export interface WifiStatus {
   ssid: string | null;
   address: string | null;
   signal: number | null;
+  /** what the windbot is doing right now, e.g. connecting to a network */
+  action: string | null;
+  message: string | null;
+  error: string | null;
   networks: KnownNetwork[];
 }
 
@@ -104,6 +108,41 @@ async function getJson<T>(path: string, timeoutMs = REQUEST_TIMEOUT_MS): Promise
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
   return data as T;
+}
+
+const PASSWORD_KEY = "windbotAdminPassword";
+/**
+ * ms a change may take. Connecting runs in the background on the windbot, but some
+ * changes wait for nmcli, which is slow on a Pi Zero.
+ */
+const POST_TIMEOUT_MS = 15_000;
+
+/**
+ * POST a change. If the windbot asks for the admin password (ADMIN_PASSWORD in
+ * config.ini), it is asked for once and kept for this browser tab.
+ */
+export async function postJson<T = unknown>(path: string, body: unknown): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Admin-Password": sessionStorage.getItem(PASSWORD_KEY) ?? "",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(POST_TIMEOUT_MS),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && attempt === 0) {
+      const password = prompt("Admin password of the windbot");
+      if (password == null) throw new Error("An admin password is needed for this.");
+      sessionStorage.setItem(PASSWORD_KEY, password);
+      continue;
+    }
+    if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
+    return data as T;
+  }
+  throw new Error("Wrong admin password.");
 }
 
 export const fetchWifi = () => getJson<WifiStatus>("/api/wifi");

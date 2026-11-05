@@ -39,6 +39,8 @@ class NetworkConfig:
     ENABLE_LOCAL_WEBSERVER: bool
     #: TCP port of the local dashboard
     WEBSERVER_PORT: int
+    #: password required for changing the Wi-Fi settings on the dashboard
+    ADMIN_PASSWORD: str | None
     #: Wi-Fi interface: shown on the dashboard, and the only one besides localhost
     #: that the dashboard listens on
     WIFI_INTERFACE: str
@@ -191,6 +193,8 @@ class Config:
             ],
             ENABLE_LOCAL_WEBSERVER=enable_webserver,
             WEBSERVER_PORT=webserver_port or 80,
+            ADMIN_PASSWORD=get_optional(config, "NETWORK", "ADMIN_PASSWORD", str)
+            or None,
             WIFI_INTERFACE=get(config, "NETWORK", "WIFI_INTERFACE", str, "wlan0"),
             AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
             AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),

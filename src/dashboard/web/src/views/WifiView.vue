@@ -18,6 +18,9 @@
             <strong>{{ wifi.ssid ? `Connecting to ${wifi.ssid}…` : "Not connected" }}</strong>
           </div>
           <div v-else>The Wi-Fi interface isn't available.</div>
+          <div v-if="wifi.action" class="banner">{{ wifi.action }}…</div>
+          <div v-if="wifi.message" class="banner">{{ wifi.message }}</div>
+          <div v-if="wifi.error" class="banner bad">{{ wifi.error }}</div>
           <div v-if="wifiError" class="banner bad">{{ wifiError }}</div>
         </template>
       </section>
@@ -26,7 +29,7 @@
         <h2>Known networks</h2>
         <table>
           <thead>
-            <tr><th>Network</th><th>Priority</th></tr>
+            <tr><th>Network</th><th>Priority</th><th></th></tr>
           </thead>
           <tbody>
             <tr v-for="network in wifi?.networks ?? []" :key="network.uuid">
@@ -36,9 +39,18 @@
                 <span v-if="!network.autoconnect" class="badge">manual</span>
               </td>
               <td>{{ network.priority }}</td>
+              <td class="row-actions">
+                <button
+                  class="btn small"
+                  :disabled="busy || network.active"
+                  @click="connectTo(network)"
+                >
+                  Connect
+                </button>
+              </td>
             </tr>
             <tr v-if="wifi && wifi.networks.length === 0">
-              <td colspan="2" class="muted">No known networks.</td>
+              <td colspan="3" class="muted">No known networks.</td>
             </tr>
           </tbody>
         </table>
@@ -71,6 +83,12 @@
 </template>
 
 <style scoped>
+.row-actions {
+  text-align: right;
+}
+.row-actions .btn {
+  margin: 2px 0;
+}
 .hint {
   margin-top: 8px;
   font-size: 0.85rem;

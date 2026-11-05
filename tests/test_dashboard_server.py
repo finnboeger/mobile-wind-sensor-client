@@ -24,7 +24,7 @@ from tests.test_dashboard_history import second
 def server() -> Iterator[DashboardServer]:
     history = MeasurementHistory()
     history.add_second(second(1, 5.0, 45))
-    dashboard = DashboardServer(("127.0.0.1", 0), history, None)
+    dashboard = DashboardServer(("127.0.0.1", 0), history, None, "secret")
     thread = threading.Thread(target=dashboard.serve_forever, daemon=True)
     thread.start()
     yield dashboard
@@ -32,10 +32,17 @@ def server() -> Iterator[DashboardServer]:
     dashboard.server_close()
 
 
-def request(server: DashboardServer, path: str) -> tuple[int, dict]:
+def request(
+    server: DashboardServer,
+    path: str,
+    body: dict | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, dict]:
     url = f"http://127.0.0.1:{server.server_address[1]}{path}"
+    data = None if body is None else json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data, headers=headers or {})  # noqa: S310 # nosec B310
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 # nosec B310
+        with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310 # nosec B310
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read())
@@ -112,12 +119,53 @@ def test_status_replaces_nan(
     assert status == 200
     assert data["values"]["gps"]["speed"] is None
     assert data["values"]["gps"]["satellites"] == 7
+    assert data["admin_password_required"] is True
 
 
 def test_wifi_unavailable(server: DashboardServer) -> None:
     status, data = request(server, "/api/wifi")
     assert status == 503
     assert "isn't available" in data["error"]
+
+
+def test_post_requires_json_and_password(server: DashboardServer) -> None:
+    body = {"uuid": "u-home"}
+    status, _ = request(
+        server,
+        "/api/wifi/connect",
+        body,
+        {"Content-Type": "text/plain"},
+    )
+    assert status == 415
+    json_header = {"Content-Type": "application/json"}
+    status, _ = request(server, "/api/wifi/connect", body, json_header)
+    assert status == 401
+    status, _ = request(
+        server,
+        "/api/wifi/connect",
+        body,
+        {**json_header, "X-Admin-Password": "secret"},
+    )
+    assert status == 503  # authorized, but no Wi-Fi in the tests
+
+
+def test_passwords_during_a_wrong_one_get_429(server: DashboardServer) -> None:
+    json_header = {"Content-Type": "application/json"}
+    # as if a wrong password were being answered right now
+    assert dashboard.server._password_check_lock.acquire(blocking=False)  # noqa: SLF001
+    try:
+        # the right one too, so the answer doesn't tell them apart
+        for password in ("wrong", "secret"):
+            status, data = request(
+                server,
+                "/api/wifi/connect",
+                {"uuid": "x"},
+                {**json_header, "X-Admin-Password": password},
+            )
+            assert status == 429
+            assert "try again" in data["error"]
+    finally:
+        dashboard.server._password_check_lock.release()  # noqa: SLF001
 
 
 def test_not_found(server: DashboardServer) -> None:
@@ -152,7 +200,7 @@ def test_interface_server_follows_the_interface() -> None:
     def make_server(_address: tuple[str, int], interface: str) -> DashboardServer:
         # Without SO_BINDTODEVICE, which only Linux has, so the test runs anywhere
         interfaces.append(interface)
-        return DashboardServer(("127.0.0.1", 0), history, None)
+        return DashboardServer(("127.0.0.1", 0), history, None, None)
 
     watcher = InterfaceServer("wlan0", 0, make_server, if_index)
     try:

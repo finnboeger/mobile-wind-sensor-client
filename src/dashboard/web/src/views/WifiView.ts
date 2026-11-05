@@ -1,5 +1,12 @@
-import { defineComponent, onMounted, onUnmounted, ref } from "vue";
-import { fetchWifi, scanWifi, type ScannedNetwork, type WifiStatus } from "../api";
+import { computed, defineComponent, onMounted, onUnmounted, ref } from "vue";
+import {
+  fetchWifi,
+  postJson,
+  scanWifi,
+  type KnownNetwork,
+  type ScannedNetwork,
+  type WifiStatus,
+} from "../api";
 
 export default defineComponent({
   setup() {
@@ -12,16 +19,25 @@ export default defineComponent({
     const POLL_INTERVAL_MS = 3000;
     let timer: number | undefined;
     let stopped = false;
+    let running: Promise<void> | null = null;
 
     // One request at a time, like on the other tabs; a stalled one times out.
-    async function poll(): Promise<void> {
+    function poll(): Promise<void> {
+      running ??= refresh().finally(() => {
+        running = null;
+        window.clearTimeout(timer);
+        if (!stopped) timer = window.setTimeout(poll, POLL_INTERVAL_MS);
+      });
+      return running;
+    }
+
+    async function refresh(): Promise<void> {
       try {
         wifi.value = await fetchWifi();
         wifiError.value = null;
       } catch (e) {
         wifiError.value = e instanceof Error ? e.message : String(e);
       }
-      if (!stopped) timer = window.setTimeout(poll, POLL_INTERVAL_MS);
     }
 
     async function scan(): Promise<void> {
@@ -36,12 +52,46 @@ export default defineComponent({
       }
     }
 
+    const busy = computed(() => wifi.value?.action != null);
+
+    async function wifiAction(path: string, body: unknown, warning: string | null): Promise<void> {
+      if (warning && !confirm(warning)) return;
+      try {
+        await postJson(path, body);
+        wifiError.value = null;
+      } catch (e) {
+        wifiError.value = e instanceof Error ? e.message : String(e);
+      }
+      // A request that started before the action may answer with the old state,
+      // so wait for it and then ask again
+      await running;
+      await poll();
+    }
+
+    function connectTo(network: KnownNetwork): void {
+      void wifiAction(
+        "/api/wifi/connect",
+        { uuid: network.uuid },
+        "If you are connected to the windbot through its current network, this page " +
+          `loses its connection.\n\nConnect to ${network.ssid}?`,
+      );
+    }
+
     onMounted(() => void poll());
     onUnmounted(() => {
       stopped = true;
       window.clearTimeout(timer);
     });
 
-    return { wifi, wifiError, scanned, scanning, scanError, scan };
+    return {
+      wifi,
+      wifiError,
+      scanned,
+      scanning,
+      scanError,
+      scan,
+      busy,
+      connectTo,
+    };
   },
 });
