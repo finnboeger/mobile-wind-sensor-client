@@ -68,6 +68,27 @@ export default defineComponent({
       await poll();
     }
 
+    const LOSE_CONNECTION =
+      "If you are connected through the hotspot, this page loses its connection. " +
+      "If no network connects, the hotspot opens again.";
+
+    function stopHotspot(): void {
+      void wifiAction(
+        "/api/wifi/hotspot",
+        { action: "stop" },
+        `${LOSE_CONNECTION}\n\nTurn off the hotspot?`,
+      );
+    }
+
+    function startHotspot(): void {
+      void wifiAction(
+        "/api/wifi/hotspot",
+        { action: "start" },
+        `The windbot leaves ${wifi.value?.ssid ?? "the current network"} and opens the hotspot ` +
+          `"${wifi.value?.hotspot_ssid}". Continue?`,
+      );
+    }
+
     function connectTo(network: KnownNetwork): void {
       void wifiAction(
         "/api/wifi/connect",
@@ -91,6 +112,8 @@ export default defineComponent({
       scanError,
       scan,
       busy,
+      stopHotspot,
+      startHotspot,
       connectTo,
     };
   },

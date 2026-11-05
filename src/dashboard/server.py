@@ -329,6 +329,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         routes: dict[str, Callable[[dict[str, Any]], None]] = {
+            "/api/wifi/hotspot": self._post_hotspot,
             "/api/wifi/connect": self._post_connect,
         }
         route = routes.get(urlparse(self.path).path)
@@ -429,6 +430,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def _get_scan(self, _: object) -> None:
         self._json({"networks": self._wifi().scan()})
+
+    def _post_hotspot(self, data: dict[str, Any]) -> None:
+        action = data.get("action")
+        if action == "start":
+            self._wifi().start_hotspot()
+        elif action == "stop":
+            self._wifi().stop_hotspot()
+        else:
+            raise RequestError(HTTPStatus.BAD_REQUEST, "Unknown action.")
+        self._json({"ok": True}, HTTPStatus.ACCEPTED)
 
     def _post_connect(self, data: dict[str, Any]) -> None:
         self._wifi().connect(str(data.get("uuid", "")))

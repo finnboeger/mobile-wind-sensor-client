@@ -44,7 +44,7 @@ class NetworkConfig:
     #: Wi-Fi interface: shown on the dashboard, and the only one besides localhost
     #: that the dashboard listens on
     WIFI_INTERFACE: str
-    AP_SSID: str | None
+    AP_SSID: str
     AP_PASSWORD: str | None
 
 
@@ -196,7 +196,7 @@ class Config:
             ADMIN_PASSWORD=get_optional(config, "NETWORK", "ADMIN_PASSWORD", str)
             or None,
             WIFI_INTERFACE=get(config, "NETWORK", "WIFI_INTERFACE", str, "wlan0"),
-            AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
+            AP_SSID=get(config, "NETWORK", "AP_SSID", str, "WindSensor"),
             AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),
         )
         broker = (get_optional(config, "MQTT", "BROKER", str) or "").strip()

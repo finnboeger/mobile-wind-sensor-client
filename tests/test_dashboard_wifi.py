@@ -1,9 +1,11 @@
 import time
+from dataclasses import replace
 
 import pytest
 
 from config import NetworkConfig
 from dashboard.wifi import (
+    HOTSPOT_CONNECTION,
     WifiBusyError,
     WifiError,
     WifiManager,
@@ -12,15 +14,20 @@ from dashboard.wifi import (
     split_terse,
 )
 
-CONFIG = NetworkConfig(
+CONFIG = NetworkConfig(  # nosec B106
     INTERFACE_PRIORITY=[],
     ENABLE_LOCAL_WEBSERVER=True,
     WEBSERVER_PORT=0,
     ADMIN_PASSWORD=None,
     WIFI_INTERFACE="wlan0",
-    AP_SSID=None,
-    AP_PASSWORD=None,
+    AP_SSID="WindSensor",
+    AP_PASSWORD="WindSensor",  # noqa: S106
 )
+
+
+@pytest.fixture(autouse=True)
+def forwarding_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(WifiManager, "forwarding_blocked", lambda _self: True)
 
 
 class FakeNetworkManager:
@@ -36,10 +43,16 @@ class FakeNetworkManager:
         self.in_reach = ["Marina", "Elsewhere"]
         self.fail_connect: set[str] = set()
         self.commands: list[list[str]] = []
+        self.hotspot: list[str] | None = None
 
-    def __call__(self, args: list[str], _timeout: float) -> str:
+    def __call__(self, args: list[str], _timeout: float) -> str:  # noqa: C901, PLR0911
         self.commands.append(args)
         command = " ".join(args)
+        if args[0] == "--show-secrets":
+            if self.hotspot is None:
+                msg = "no such connection profile"
+                raise WifiError(msg)
+            return "".join(f"{value}\n" for value in self.hotspot)
         if "device show" in command:
             return (
                 f"GENERAL.STATE:{self.state} (state)\n"
@@ -70,6 +83,12 @@ class FakeNetworkManager:
                 f"802-11-wireless.mode:{c.get('mode', 'infrastructure')}\n"
                 for uuid, c in connections
             )
+        if args[:3] == ["connection", "up", HOTSPOT_CONNECTION]:
+            self.state, self.connection = 100, HOTSPOT_CONNECTION
+            return ""
+        if args[:2] == ["connection", "down"]:
+            self.state, self.connection = 30, ""
+            return ""
         if args[3:5] == ["up", "uuid"]:
             uuid = args[5]
             if uuid in self.fail_connect:
@@ -77,7 +96,27 @@ class FakeNetworkManager:
                 raise WifiError(msg)
             self.state, self.connection = 100, self.connections[uuid]["name"]
             return ""
+        if args[:2] == ["connection", "add"] and "con-name" in args:
+            self._add(args)
+            return ""
+        if args[:3] == ["connection", "delete", "uuid"]:
+            del self.connections[args[3]]
         return ""
+
+    def _add(self, args: list[str]) -> None:
+        name = args[args.index("con-name") + 1]
+        if name == HOTSPOT_CONNECTION:
+            psk = args[args.index("wifi-sec.psk") + 1] if "wifi-sec.psk" in args else ""
+            key_mgmt = "wpa-psk" if psk else ""
+            self.hotspot = [args[5], args[args.index("ssid") + 1], key_mgmt, psk]
+        else:
+            self.connections[f"u-{name}"] = {
+                "name": name,
+                "ssid": args[args.index("ssid") + 1],
+                "priority": int(
+                    args[args.index("connection.autoconnect-priority") + 1],
+                ),
+            }
 
 
 class Clock:
@@ -144,7 +183,7 @@ def test_status_reads_the_state_only_when_asked() -> None:
     assert sum("device show" in " ".join(c) for c in nm.commands) == reads + 1
 
 
-def test_known_networks_skip_access_points_and_other_types() -> None:
+def test_known_networks_skip_hotspot_and_other_types() -> None:
     nm = FakeNetworkManager()
     nm.connections["u-ap"] = {
         "name": "other-ap",
@@ -192,3 +231,91 @@ def test_second_action_is_refused_while_one_runs() -> None:
             manager.connect("u-home")
     finally:
         manager._action_lock.release()  # noqa: SLF001
+
+
+def hotspot_adds(nm: FakeNetworkManager) -> int:
+    return sum(1 for c in nm.commands if c[:2] == ["connection", "add"])
+
+
+def test_start_hotspot() -> None:
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.start_hotspot()
+    wait_for_action(manager)
+    assert nm.connection == HOTSPOT_CONNECTION
+    hotspot = next(c for c in nm.commands if c[:2] == ["connection", "add"])
+    assert "ap" in hotspot
+    assert "shared" in hotspot
+    assert hotspot[hotspot.index("wifi-sec.psk") + 1] == "WindSensor"
+    manager.tick()
+    status = manager.status()
+    assert status["mode"] == "hotspot"
+    assert status["ssid"] == "WindSensor"
+    assert [n["ssid"] for n in status["networks"]] == ["Home", "Marina"]
+
+
+def test_hotspot_needs_the_forwarding_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(WifiManager, "forwarding_blocked", lambda _self: False)
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.start_hotspot()
+    wait_for_action(manager)
+    assert nm.connection == ""
+    assert "setup-hotspot.sh" in manager.status()["error"]
+
+
+def test_invalid_hotspot_password_keeps_it_closed() -> None:
+    nm = FakeNetworkManager()
+    config = replace(CONFIG, AP_PASSWORD="short")  # noqa: S106  # nosec B106
+    manager = WifiManager(config, run=nm, clock=Clock())
+    manager.start_hotspot()
+    wait_for_action(manager)
+    assert nm.connection == ""
+    assert nm.hotspot is None
+    assert "AP_PASSWORD" in manager.status()["error"]
+
+
+def test_hotspot_profile_is_only_recreated_when_changed() -> None:
+    nm = FakeNetworkManager()
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.start_hotspot()
+    wait_for_action(manager)
+    manager.start_hotspot()
+    wait_for_action(manager)
+    assert hotspot_adds(nm) == 1
+
+    changed = WifiManager(
+        replace(CONFIG, AP_PASSWORD="new-password"),  # noqa: S106  # nosec B106
+        run=nm,
+        clock=Clock(),
+    )
+    changed.start_hotspot()
+    wait_for_action(changed)
+    assert hotspot_adds(nm) == 2
+    assert nm.hotspot is not None
+    assert nm.hotspot[3] == "new-password"
+
+
+def test_stop_hotspot_joins_known_network_in_reach() -> None:
+    nm = FakeNetworkManager()
+    nm.state, nm.connection = 100, HOTSPOT_CONNECTION
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.tick()
+
+    manager.stop_hotspot()
+    wait_for_action(manager)
+    assert nm.connection == "Marina"
+    assert manager.status()["message"] == "Connected to Marina."
+
+
+def test_stop_hotspot_without_network_reopens_it() -> None:
+    nm = FakeNetworkManager()
+    nm.state, nm.connection = 100, HOTSPOT_CONNECTION
+    nm.in_reach = ["Elsewhere"]
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.tick()
+
+    manager.stop_hotspot()
+    wait_for_action(manager)
+    assert ["connection", "down", HOTSPOT_CONNECTION] in nm.commands
+    assert nm.connection == HOTSPOT_CONNECTION

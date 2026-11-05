@@ -82,10 +82,14 @@ export interface KnownNetwork {
 }
 
 export interface WifiStatus {
-  mode: "client" | "searching" | "unavailable";
+  mode: "client" | "searching" | "hotspot" | "unavailable";
   ssid: string | null;
   address: string | null;
   signal: number | null;
+  /** devices connected to the hotspot */
+  clients: number | null;
+  hotspot_ssid: string;
+  hotspot_address: string;
   /** what the windbot is doing right now, e.g. connecting to a network */
   action: string | null;
   message: string | null;
