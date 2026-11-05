@@ -56,6 +56,8 @@ KNOWN_NETWORK_RETRY_SECONDS = 900
 #: a device on the hotspot counts as using it if it sent something within this many
 #: seconds; a phone with the dashboard open polls every few seconds
 ACTIVE_CLIENT_SECONDS = 60
+#: seconds known networks are ignored for, so a forgotten 4G test ends by itself
+IGNORE_KNOWN_NETWORKS_SECONDS = 3600
 #: seconds to wait for the interface to leave hotspot mode before scanning
 LEAVE_HOTSPOT_TIMEOUT_SECONDS = 10
 #: nice value of the Wi-Fi threads, so they don't slow down the wind processing
@@ -204,6 +206,14 @@ class WifiManager:
         self._active_clients: int | None = None
         self._signal_time: float | None = None
         self._networks_time: float | None = None
+        #: monotonic time until which the hotspot stays open instead of joining known
+        #: networks, e.g. to test the internet connection over 4G. Not saved, a
+        #: restart clears it.
+        self._ignore_until: float | None = None
+
+    @property
+    def _ignore_known_networks(self) -> bool:
+        return self._ignore_until is not None and self._clock() < self._ignore_until
 
     # ------------------------------------------------------------------ queries
 
@@ -380,7 +390,8 @@ class WifiManager:
             ):
                 status.signal = self._current_signal()
                 self._signal_time = now
-            deadline = status.hotspot_deadline
+            ignoring = self._ignore_known_networks
+            deadline = None if ignoring else status.hotspot_deadline
             return {
                 "mode": status.mode,
                 "ssid": status.ssid,
@@ -391,6 +402,12 @@ class WifiManager:
                     max(0, round(deadline - now)) if deadline is not None else None
                 ),
                 "hotspot_enabled": self.config.ENABLE_HOTSPOT,
+                "ignore_known_networks": ignoring,
+                "ignore_known_networks_for": (
+                    max(0, round(self._ignore_until - now))
+                    if ignoring and self._ignore_until is not None
+                    else None
+                ),
                 "hotspot_ssid": self.config.AP_SSID,
                 "hotspot_address": HOTSPOT_ADDRESS,
                 "action": status.action,
@@ -433,27 +450,38 @@ class WifiManager:
             if device.state == STATE_CONNECTED:
                 status.hotspot_deadline = None
                 self._had_first_deadline = True
-                if status.mode == "client":
-                    return
-                blocked = not self._block_lost()
-                if blocked and not self._retry_due(self._active_clients):
+                if status.mode == "hotspot":
+                    blocked = not self._block_lost()
+                    if blocked and not self._retry_due(self._active_clients):
+                        return
+                elif not self._ignore_known_networks or not self._can_open_hotspot():
                     return
             elif not self._hotspot_due(device) or not self._can_open_hotspot():
                 return
         if status.mode == "hotspot":
             self._leave_hotspot(blocked=blocked)
             return
-        logger.info("No Wi-Fi network connected, opening the hotspot")
+        message = (
+            "Ignoring known networks, so the hotspot was opened."
+            if self._ignore_known_networks
+            else "No known network connected, so the hotspot was opened."
+        )
+        logger.info(message)
+        self._run_action("Opening the hotspot", lambda: self._open_hotspot(message))
 
-        def action() -> str:
-            try:
-                self._start_hotspot()
-            except WifiError:
-                self._restart_deadline()
-                raise
-            return "No known network connected, so the hotspot was opened."
-
-        self._run_action("Opening the hotspot", action)
+    def _open_hotspot(self, message: str) -> str:
+        """Open the hotspot from the supervision, which tries again after a delay."""
+        try:
+            self._start_hotspot()
+        except WifiError as e:
+            self._restart_deadline()
+            if self._ignore_known_networks:
+                # otherwise it would be tried again on every check
+                self._ignore_until = None
+                msg = f"{e} Known networks aren't ignored anymore."
+                raise WifiError(msg) from e
+            raise
+        return message
 
     def _show_device(self, device: DeviceState | None) -> None:
         """Update the status from the state of the interface."""
@@ -547,6 +575,8 @@ class WifiManager:
 
     def _close_unblocked_hotspot(self) -> str:
         """Close the hotspot, whose forwarding block disappeared, e.g. by a flush."""
+        # otherwise the supervision would try to open it again right away
+        self._ignore_until = None
         self._restart_deadline()
         self.nmcli("connection", "down", HOTSPOT_CONNECTION)
         return (
@@ -557,6 +587,14 @@ class WifiManager:
     def _retry_due(self, active_clients: int | None) -> bool:
         """Return whether to try the known networks from the hotspot now."""
         now = self._clock()
+        if self._ignore_until is not None:
+            if now < self._ignore_until:
+                self._retry_at = None
+                return False
+            # the time ran out: try them right away, even with devices connected
+            self._ignore_until = None
+            logger.info("Stopped ignoring known networks, trying them again")
+            return True
         if self._retry_at is None or active_clients != 0:
             # not while a device uses the hotspot (or the count is unknown)
             self._retry_at = now + KNOWN_NETWORK_RETRY_SECONDS
@@ -612,6 +650,9 @@ class WifiManager:
     def _hotspot_due(self, device: DeviceState) -> bool:
         """Return whether to open the hotspot, while no network is connected."""
         status = self._status
+        if self._ignore_known_networks:
+            status.hotspot_deadline = None
+            return True
         if not self.config.ENABLE_HOTSPOT:
             status.hotspot_deadline = None
             return False
@@ -858,6 +899,7 @@ class WifiManager:
         from_hotspot = self._status.mode == "hotspot"
 
         def action() -> str:
+            self._ignore_until = None
             self._restart_deadline()
             try:
                 self._connect(uuid)
@@ -879,10 +921,41 @@ class WifiManager:
     def start_hotspot(self) -> None:
         self._in_background("Opening the hotspot", self._start_hotspot)
 
+    def ignore_known_networks(self, *, enabled: bool) -> None:
+        """
+        Keep the hotspot open instead of joining known networks, or stop doing so.
+
+        While enabled, the windbot's internet connection goes over the 4G modem,
+        which is how it can be tested within reach of a known network.
+        """
+        if enabled:
+            self._in_background("Opening the hotspot", self._ignore_and_start_hotspot)
+        elif self._ignore_known_networks and self._status.mode == "hotspot":
+            # turned off within the action, so a busy 409 leaves it on
+            self.stop_hotspot()
+        else:
+            with self._lock:
+                if self._action_lock.locked():
+                    msg = "Another Wi-Fi change is still running."
+                    raise WifiBusyError(msg)
+                self._ignore_until = None
+
+    def _ignore_and_start_hotspot(self) -> str:
+        if self._status.mode != "hotspot":
+            self._start_hotspot()
+        # only once it's open, so a failure doesn't leave it on
+        self._ignore_until = self._clock() + IGNORE_KNOWN_NETWORKS_SECONDS
+        minutes = IGNORE_KNOWN_NETWORKS_SECONDS // 60
+        return (
+            f"Ignoring known networks for {minutes} minutes, until you join one, or "
+            "until the windbot restarts. Its internet connection uses the 4G modem."
+        )
+
     def stop_hotspot(self) -> None:
         """Close the hotspot and look for a known network."""
 
         def action() -> str:
+            self._ignore_until = None
             self._restart_deadline()
             try:
                 self.nmcli("connection", "down", HOTSPOT_CONNECTION)

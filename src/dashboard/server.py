@@ -330,6 +330,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         routes: dict[str, Callable[[dict[str, Any]], None]] = {
             "/api/wifi/hotspot": self._post_hotspot,
+            "/api/wifi/ignore-known-networks": self._post_ignore_known_networks,
             "/api/wifi/connect": self._post_connect,
             "/api/wifi/networks": self._post_network,
             "/api/wifi/networks/delete": self._post_delete_network,
@@ -441,6 +442,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._wifi().stop_hotspot()
         else:
             raise RequestError(HTTPStatus.BAD_REQUEST, "Unknown action.")
+        self._json({"ok": True}, HTTPStatus.ACCEPTED)
+
+    def _post_ignore_known_networks(self, data: dict[str, Any]) -> None:
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            raise RequestError(HTTPStatus.BAD_REQUEST, "Expected enabled: true/false.")
+        self._wifi().ignore_known_networks(enabled=enabled)
         self._json({"ok": True}, HTTPStatus.ACCEPTED)
 
     def _post_connect(self, data: dict[str, Any]) -> None:

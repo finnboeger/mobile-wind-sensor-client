@@ -97,6 +97,10 @@ export interface WifiStatus {
   action: string | null;
   message: string | null;
   error: string | null;
+  /** known networks are ignored to test the 4G connection */
+  ignore_known_networks: boolean;
+  /** seconds until known networks are joined again, while they are ignored */
+  ignore_known_networks_for: number | null;
   networks: KnownNetwork[];
 }
 

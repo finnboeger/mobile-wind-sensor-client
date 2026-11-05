@@ -10,6 +10,7 @@ from dashboard import commands
 from dashboard.wifi import (
     ACTIVE_CLIENT_SECONDS,
     HOTSPOT_CONNECTION,
+    IGNORE_KNOWN_NETWORKS_SECONDS,
     KNOWN_NETWORK_RETRY_SECONDS,
     WifiBusyError,
     WifiError,
@@ -54,6 +55,7 @@ class FakeNetworkManager:
         self.hotspot: list[str] | None = None
         self.fail_device_show = False
         self.fail_rescan = False
+        self.fail_hotspot = False
 
     def __call__(self, args: list[str], _timeout: float) -> str:  # noqa: C901, PLR0911, PLR0912
         self.commands.append(args)
@@ -100,6 +102,9 @@ class FakeNetworkManager:
                 for uuid, c in connections
             )
         if args[:3] == ["connection", "up", HOTSPOT_CONNECTION]:
+            if self.fail_hotspot:
+                msg = "Device doesn't support AP mode"
+                raise WifiError(msg)
             self.state, self.connection = 100, HOTSPOT_CONNECTION
             return ""
         if args[:2] == ["connection", "down"]:
@@ -607,3 +612,131 @@ def test_network_changes_wait_for_other_changes() -> None:
     assert "u-marina" in nm.connections
     manager.delete_network("u-marina")
     assert "u-marina" not in nm.connections
+
+
+def test_ignore_known_networks_opens_hotspot_and_keeps_it() -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    nm.state, nm.connection = 100, "Home"
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    manager.tick()
+
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    assert nm.connection == HOTSPOT_CONNECTION
+    manager.tick()
+    status = manager.status()
+    assert status["mode"] == "hotspot"
+    assert status["ignore_known_networks"] is True
+
+    # a known network connecting anyway is left right away, without a delay
+    nm.connection = "Home"
+    manager.tick()
+    assert nm.connection == HOTSPOT_CONNECTION
+    nm.state, nm.connection = 30, ""
+    manager.tick()
+    assert nm.connection == HOTSPOT_CONNECTION
+
+
+def test_ignoring_known_networks_skips_the_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    nm.in_reach = ["Marina"]
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    monkeypatch.setattr(manager, "hotspot_stations", list)
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    manager.tick()
+    retry_after(clock)
+    manager.tick()
+    assert nm.connection == HOTSPOT_CONNECTION
+
+
+def test_ignore_known_networks_without_hotspot_enabled() -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    manager = WifiManager(replace(CONFIG, ENABLE_HOTSPOT=False), run=nm, clock=clock)
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    assert nm.connection == HOTSPOT_CONNECTION
+
+
+def test_stop_ignoring_joins_known_network() -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    manager.tick()
+
+    manager.ignore_known_networks(enabled=False)
+    wait_for_action(manager)
+    assert nm.connection == "Marina"
+    manager.tick()
+    assert manager.status()["ignore_known_networks"] is False
+    assert manager.status()["mode"] == "client"
+
+
+def test_connect_stops_ignoring_known_networks() -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    manager.tick()
+
+    manager.connect("u-home")
+    wait_for_action(manager)
+    manager.tick()
+    assert nm.connection == "Home"
+    assert manager.status()["ignore_known_networks"] is False
+
+
+def test_failed_hotspot_stops_ignoring_known_networks() -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    nm.state, nm.connection = 100, "Home"
+    nm.fail_hotspot = True
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    manager.tick()
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    assert manager.status()["ignore_known_networks"] is False
+    assert "AP mode" in manager.status()["error"]
+    for _ in range(6):
+        clock.now += 10
+        manager.tick()
+    assert nm.connection == "Home"
+    hotspot_up = ["connection", "up", HOTSPOT_CONNECTION]
+    assert sum(c[:3] == hotspot_up for c in nm.commands) == 1
+
+
+def test_stop_ignoring_while_busy_keeps_it_on() -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    manager.tick()
+    manager._action_lock.acquire()  # noqa: SLF001 - e.g. a retry in progress
+    try:
+        with pytest.raises(WifiBusyError):
+            manager.ignore_known_networks(enabled=False)
+    finally:
+        manager._action_lock.release()  # noqa: SLF001
+    assert manager.status()["ignore_known_networks"] is True
+
+
+def test_ignoring_known_networks_ends_after_a_while(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    monkeypatch.setattr(manager, "hotspot_stations", lambda: [100])  # in use
+    manager.ignore_known_networks(enabled=True)
+    wait_for_action(manager)
+    manager.tick()
+    assert (
+        manager.status()["ignore_known_networks_for"] == IGNORE_KNOWN_NETWORKS_SECONDS
+    )
+
+    clock.now += IGNORE_KNOWN_NETWORKS_SECONDS + 1
+    manager.tick()
+    # tried right away, although a device uses the hotspot
+    assert nm.connection == "Marina"
+    assert manager.status()["ignore_known_networks"] is False
