@@ -1,10 +1,22 @@
+import time
+
+import pytest
+
 from config import NetworkConfig
-from dashboard.wifi import WifiManager, parse_properties, split_terse
+from dashboard.wifi import (
+    WifiBusyError,
+    WifiError,
+    WifiManager,
+    WifiRequestError,
+    parse_properties,
+    split_terse,
+)
 
 CONFIG = NetworkConfig(
     INTERFACE_PRIORITY=[],
     ENABLE_LOCAL_WEBSERVER=True,
     WEBSERVER_PORT=0,
+    ADMIN_PASSWORD=None,
     WIFI_INTERFACE="wlan0",
     AP_SSID=None,
     AP_PASSWORD=None,
@@ -22,6 +34,7 @@ class FakeNetworkManager:
             "u-marina": {"name": "Marina", "ssid": "Marina", "priority": 0},
         }
         self.in_reach = ["Marina", "Elsewhere"]
+        self.fail_connect: set[str] = set()
         self.commands: list[list[str]] = []
 
     def __call__(self, args: list[str], _timeout: float) -> str:
@@ -57,6 +70,13 @@ class FakeNetworkManager:
                 f"802-11-wireless.mode:{c.get('mode', 'infrastructure')}\n"
                 for uuid, c in connections
             )
+        if args[3:5] == ["up", "uuid"]:
+            uuid = args[5]
+            if uuid in self.fail_connect:
+                msg = "Connection activation failed"
+                raise WifiError(msg)
+            self.state, self.connection = 100, self.connections[uuid]["name"]
+            return ""
         return ""
 
 
@@ -66,6 +86,14 @@ class Clock:
 
     def __call__(self) -> float:
         return self.now
+
+
+def wait_for_action(manager: WifiManager) -> None:
+    for _ in range(200):
+        if manager.status()["action"] is None:
+            return
+        time.sleep(0.01)
+    pytest.fail("Wi-Fi action did not finish")
 
 
 def test_split_terse_unescapes_colons() -> None:
@@ -128,3 +156,39 @@ def test_known_networks_skip_access_points_and_other_types() -> None:
     assert [n["ssid"] for n in manager.known_networks()] == ["Home", "Marina"]
     # one call for the list, one for the details of all of them
     assert len(nm.commands) == 2
+
+
+def test_connect_to_known_network() -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    manager.connect("u-marina")
+    wait_for_action(manager)
+    status = manager.status()
+    assert status["message"] == "Connected to Marina."
+    assert status["mode"] == "client"
+    assert status["ssid"] == "Marina"
+
+
+def test_failed_connect_is_reported() -> None:
+    nm = FakeNetworkManager()
+    nm.fail_connect = {"u-home"}
+    manager = WifiManager(CONFIG, run=nm, clock=Clock())
+    manager.connect("u-home")
+    wait_for_action(manager)
+    assert "Could not connect to Home" in manager.status()["error"]
+
+
+def test_connect_unknown_network() -> None:
+    manager = WifiManager(CONFIG, run=FakeNetworkManager(), clock=Clock())
+    with pytest.raises(WifiRequestError):
+        manager.connect("nope")
+
+
+def test_second_action_is_refused_while_one_runs() -> None:
+    manager = WifiManager(CONFIG, run=FakeNetworkManager(), clock=Clock())
+    manager._action_lock.acquire()  # noqa: SLF001 - an action in progress
+    try:
+        with pytest.raises(WifiBusyError):
+            manager.connect("u-home")
+    finally:
+        manager._action_lock.release()  # noqa: SLF001

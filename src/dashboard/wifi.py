@@ -1,13 +1,16 @@
 """
-Wi-Fi status through NetworkManager (``nmcli``).
+Wi-Fi status and changes through NetworkManager (``nmcli``).
 
 :class:`WifiManager` reads the state of the Wi-Fi interface when the dashboard asks
 for it, so it can show which network it is connected to, the known networks and the
 networks in reach. Nothing runs while nobody looks, since every ``nmcli`` costs
-noticeable CPU on a Pi Zero.
+noticeable CPU on a Pi Zero. Changes, e.g. connecting to a known network, run one at
+a time in a background thread.
 """
 
+import contextlib
 import logging
+import os
 import shutil
 import subprocess  # nosec B404
 import threading
@@ -29,11 +32,23 @@ STATE_CONNECTED = 100
 STATE_CACHE_SECONDS = 3
 #: seconds the list of known networks is cached
 NETWORKS_CACHE_SECONDS = 10
+#: seconds nmcli waits for a connection to come up
+CONNECT_TIMEOUT_SECONDS = 30
+#: nice value of the Wi-Fi threads, so they don't slow down the wind processing
+BACKGROUND_NICE = 10
 WIFI_TYPE = "802-11-wireless"
 
 
 class WifiError(Exception):
     """A NetworkManager command failed."""
+
+
+class WifiRequestError(WifiError):
+    """The request can't be carried out as asked, e.g. a too short password."""
+
+
+class WifiBusyError(WifiError):
+    """Another change of the connection is still running."""
 
 
 Runner = Callable[[list[str], float], str]
@@ -85,6 +100,12 @@ def parse_properties(output: str) -> dict[str, str]:
     return properties
 
 
+def lower_priority() -> None:
+    """Run the calling thread at a lower CPU priority (Linux has a nice per thread)."""
+    with contextlib.suppress(OSError, AttributeError):
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), BACKGROUND_NICE)
+
+
 @dataclass
 class DeviceState:
     state: int
@@ -99,6 +120,10 @@ class WifiStatus:
     ssid: str | None = None
     address: str | None = None
     signal: int | None = None
+    #: description of the action that is currently running
+    action: str | None = None
+    message: str | None = None
+    error: str | None = None
     networks: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -114,6 +139,7 @@ class WifiManager:
         self._run = run
         self._clock = clock
         self._lock = threading.RLock()
+        self._action_lock = threading.Lock()
         self._status = WifiStatus()
         self._state_time: float | None = None
         self._networks_time: float | None = None
@@ -244,9 +270,13 @@ class WifiManager:
                 or now - self._state_time >= STATE_CACHE_SECONDS
             ):
                 self.tick()
-            if self._status.mode != "unavailable" and (
-                self._networks_time is None
-                or now - self._networks_time > NETWORKS_CACHE_SECONDS
+            if (
+                self._status.mode != "unavailable"
+                and (
+                    self._networks_time is None
+                    or now - self._networks_time > NETWORKS_CACHE_SECONDS
+                )
+                and not self._action_lock.locked()
             ):
                 try:
                     self._status.networks = self.known_networks()
@@ -259,6 +289,9 @@ class WifiManager:
                 "ssid": status.ssid,
                 "address": status.address,
                 "signal": status.signal,
+                "action": status.action,
+                "message": status.message,
+                "error": status.error,
                 "networks": status.networks,
             }
 
@@ -291,10 +324,105 @@ class WifiManager:
             return None
         return next((n["signal"] for n in networks if n["in_use"]), None)
 
+    # ---------------------------------------------------------------- actions
+
+    def _run_action(
+        self,
+        description: str,
+        action: Callable[[], str | None],
+        *,
+        locked: bool = False,
+    ) -> None:
+        """
+        Run an action that changes the connection, one at a time.
+
+        ``locked``: the caller already holds the action lock, which is released here.
+        """
+        if not locked and not self._action_lock.acquire(blocking=False):
+            msg = "Another Wi-Fi change is still running."
+            raise WifiBusyError(msg)
+        try:
+            with self._lock:
+                self._status.action = description
+                self._status.error = None
+                self._status.message = None
+            try:
+                message = action()
+            except WifiError as e:
+                logger.warning("%s failed: %s", description, e)
+                with self._lock:
+                    self._status.error = f"{description} failed: {e}"
+            except Exception:
+                logger.exception("%s failed", description)
+                with self._lock:
+                    self._status.error = f"{description} failed."
+            else:
+                with self._lock:
+                    self._status.message = message
+        finally:
+            with self._lock:
+                self._status.action = None
+                self._state_time = self._networks_time = None
+            self._action_lock.release()
+
+    def _in_background(
+        self,
+        description: str,
+        action: Callable[[], str | None],
+    ) -> None:
+        # taken here, so a second request at the same moment gets a 409 instead of
+        # being told it worked; the thread releases it
+        if not self._action_lock.acquire(blocking=False):
+            msg = "Another Wi-Fi change is still running."
+            raise WifiBusyError(msg)
+
+        def run() -> None:
+            lower_priority()
+            self._run_action(description, action, locked=True)
+
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except BaseException:
+            self._action_lock.release()
+            raise
+
+    def _connect(self, uuid: str) -> None:
+        self.nmcli(
+            "--wait",
+            str(CONNECT_TIMEOUT_SECONDS),
+            "connection",
+            "up",
+            "uuid",
+            uuid,
+            timeout=CONNECT_TIMEOUT_SECONDS + 5,
+        )
+
+    def connect(self, uuid: str) -> None:
+        """Connect to a known network."""
+        network = next((n for n in self.known_networks() if n["uuid"] == uuid), None)
+        if network is None:
+            msg = "Unknown network."
+            raise WifiRequestError(msg)
+
+        def action() -> str:
+            try:
+                self._connect(uuid)
+            except WifiError as e:
+                msg = f"Could not connect to {network['ssid']}: {e}"
+                raise WifiError(msg) from e
+            return f"Connected to {network['ssid']}."
+
+        self._in_background(f"Connecting to {network['ssid']}", action)
+
 
 def init(network_config: NetworkConfig) -> WifiManager | None:
     """Return the Wi-Fi manager, or None if NetworkManager isn't available."""
     if shutil.which("nmcli") is None:
         logger.warning("nmcli not found, Wi-Fi management is disabled")
         return None
+    if network_config.ADMIN_PASSWORD is None:
+        logger.warning(
+            "ADMIN_PASSWORD isn't set, anyone who can reach the dashboard can change "
+            "the Wi-Fi",
+        )
     return WifiManager(network_config)
