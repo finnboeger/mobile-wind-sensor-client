@@ -50,6 +50,14 @@ ACTIVATION_GRACE_SECONDS = 60
 CONNECT_TIMEOUT_SECONDS = 30
 #: seconds between two checks of the interface in the background
 SUPERVISION_INTERVAL_SECONDS = 10
+#: seconds the hotspot stays open before the known networks are tried again, as long
+#: as no device uses it
+KNOWN_NETWORK_RETRY_SECONDS = 900
+#: a device on the hotspot counts as using it if it sent something within this many
+#: seconds; a phone with the dashboard open polls every few seconds
+ACTIVE_CLIENT_SECONDS = 60
+#: seconds to wait for the interface to leave hotspot mode before scanning
+LEAVE_HOTSPOT_TIMEOUT_SECONDS = 10
 #: nice value of the Wi-Fi threads, so they don't slow down the wind processing
 BACKGROUND_NICE = 10
 #: checks in a row that must miss the forwarding block before the hotspot is closed,
@@ -187,6 +195,10 @@ class WifiManager:
         self._block_check_failures = 0
         #: whether the missing forwarding block was logged, so it's logged only once
         self._reported_unblocked = False
+        #: monotonic time at which the known networks are tried again from the hotspot
+        self._retry_at: float | None = None
+        #: devices that used the hotspot recently, see ACTIVE_CLIENT_SECONDS
+        self._active_clients: int | None = None
         self._signal_time: float | None = None
         self._networks_time: float | None = None
 
@@ -220,14 +232,18 @@ class WifiManager:
             address=address.split("/")[0] if address else None,
         )
 
-    def scan(self, *, rescan: bool = True) -> list[dict[str, Any]]:
-        """Return the networks in reach, strongest first, one entry per SSID."""
+    def scan(self, *, rescan: bool = True, cached: bool = True) -> list[dict[str, Any]]:
+        """
+        Return the networks in reach, strongest first, one entry per SSID.
+
+        ``cached``: return NetworkManager's last results if the new scan fails.
+        """
         fields = ["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi"]
         args = [*fields, "list", "ifname", self.interface, "--rescan"]
         try:
             output = self.nmcli(*args, "yes" if rescan else "no", timeout=30)
         except WifiError:
-            if not rescan:
+            if not rescan or not cached:
                 raise
             # scanning isn't always possible while the access point is running
             output = self.nmcli(*args, "no")
@@ -309,14 +325,21 @@ class WifiManager:
                 current[key] = ":".join(split_terse(value))
         return details
 
-    def hotspot_clients(self) -> int | None:
+    def hotspot_stations(self) -> list[int] | None:
+        """Return how long each device on the hotspot has been inactive, in ms."""
         try:
             result = commands.run(["iw", "dev", self.interface, "station", "dump"], 5)
         except (OSError, subprocess.TimeoutExpired):
             return None
-        return sum(
-            1 for line in result.stdout.splitlines() if line.startswith("Station")
-        )
+        stations: list[int] = []
+        for line in result.stdout.splitlines():
+            if line.startswith("Station"):
+                stations.append(0)  # counts as active if iw leaves the time out
+            elif stations and line.strip().startswith("inactive time:"):
+                value = line.split(":", 1)[1].split()
+                if value and value[0].isdigit():
+                    stations[-1] = int(value[0])
+        return stations
 
     def forwarding_blocked(self) -> bool:
         """Return whether setup-hotspot.sh blocks forwarding from the hotspot."""
@@ -379,6 +402,9 @@ class WifiManager:
         """
         Update the status and open the hotspot when its deadline has passed.
 
+        From an unused hotspot the known networks are tried again now and then, e.g.
+        for a phone hotspot switched on as a backup when 4G fails.
+
         An open hotspot is closed if its forwarding block disappeared, e.g. because
         another firewall tool flushed the rules.
         """
@@ -392,25 +418,27 @@ class WifiManager:
 
     def _supervise(self) -> None:
         device = self.device_state()
+        blocked = True
         with self._lock:
             status = self._status
             self._show_device(device)
             if status.mode != "hotspot":
                 self._block_check_failures = 0
+                self._retry_at = None
             if device is None or device.state <= STATE_UNAVAILABLE:
                 return
             if device.state == STATE_CONNECTED:
                 status.hotspot_deadline = None
                 self._had_first_deadline = True
-                if status.mode == "client" or not self._block_lost():
+                if status.mode == "client":
+                    return
+                blocked = not self._block_lost()
+                if blocked and not self._retry_due(self._active_clients):
                     return
             elif not self._hotspot_due(device) or not self._can_open_hotspot():
                 return
         if status.mode == "hotspot":
-            logger.error(
-                "Forwarding from the hotspot isn't blocked anymore, closing it",
-            )
-            self._run_action("Closing the hotspot", self._close_unblocked_hotspot)
+            self._leave_hotspot(blocked=blocked)
             return
         logger.info("No Wi-Fi network connected, opening the hotspot")
 
@@ -445,7 +473,14 @@ class WifiManager:
             status.ssid = self.config.AP_SSID
             status.address = device.address
             status.signal = None
-            status.clients = self.hotspot_clients()
+            stations = self.hotspot_stations()
+            if stations is None:
+                status.clients = self._active_clients = None
+            else:
+                status.clients = len(stations)
+                self._active_clients = sum(
+                    1 for ms in stations if ms < ACTIVE_CLIENT_SECONDS * 1000
+                )
         else:
             status.mode = "client"
             status.ssid = device.connection
@@ -497,6 +532,16 @@ class WifiManager:
         self._restart_deadline()
         return False
 
+    def _leave_hotspot(self, *, blocked: bool) -> None:
+        if not blocked:
+            logger.error(
+                "Forwarding from the hotspot isn't blocked anymore, closing it",
+            )
+            self._run_action("Closing the hotspot", self._close_unblocked_hotspot)
+        else:
+            logger.info("The hotspot is unused, trying the known networks again")
+            self._run_action("Looking for known networks", self._retry_known_networks)
+
     def _close_unblocked_hotspot(self) -> str:
         """Close the hotspot, whose forwarding block disappeared, e.g. by a flush."""
         self._restart_deadline()
@@ -505,6 +550,61 @@ class WifiManager:
             "The hotspot was closed because forwarding from it to the internet wasn't "
             "blocked anymore. Run sudo scripts/setup-hotspot.sh."
         )
+
+    def _retry_due(self, active_clients: int | None) -> bool:
+        """Return whether to try the known networks from the hotspot now."""
+        now = self._clock()
+        if self._retry_at is None or active_clients != 0:
+            # not while a device uses the hotspot (or the count is unknown)
+            self._retry_at = now + KNOWN_NETWORK_RETRY_SECONDS
+            return False
+        if now < self._retry_at:
+            return False
+        self._retry_at = None
+        return True
+
+    def _retry_known_networks(self) -> str | None:
+        """
+        Close the hotspot for a known network in reach, or open it again.
+
+        Not finding one is the usual outcome, so a failed search is only logged.
+        """
+        try:
+            self.nmcli("connection", "down", HOTSPOT_CONNECTION)
+        except WifiError as e:
+            logger.info("Could not close the hotspot: %s", e)
+        connected = None
+        try:
+            connected = self._wait_for_hotspot_down()
+            if connected is None:
+                # NetworkManager doesn't scan while the hotspot runs, so its cached
+                # list can be hours old
+                connected = self._try_known_networks(cached=False)
+        except WifiError as e:
+            logger.info("Looking for known networks failed: %s", e)
+        finally:
+            if connected is None:
+                self._start_hotspot()
+        return connected
+
+    def _wait_for_hotspot_down(self) -> str | None:
+        """
+        Wait until the interface left hotspot mode, so a scan works.
+
+        Return a message if NetworkManager joined a known network by itself meanwhile.
+        """
+        deadline = time.monotonic() + LEAVE_HOTSPOT_TIMEOUT_SECONDS
+        while True:
+            device = self.device_state()
+            if device is not None and device.connection != HOTSPOT_CONNECTION:
+                if device.state == STATE_DISCONNECTED:
+                    return None
+                if device.state == STATE_CONNECTED:
+                    return f"Connected to {device.connection}."
+            if time.monotonic() >= deadline:
+                msg = "The Wi-Fi didn't leave hotspot mode."
+                raise WifiError(msg)
+            time.sleep(0.5)
 
     def _hotspot_due(self, device: DeviceState) -> bool:
         """Return whether to open the hotspot, while no network is connected."""
@@ -712,12 +812,16 @@ class WifiManager:
         with self._lock:
             self._status.hotspot_deadline = None
 
-    def _try_known_networks(self) -> str | None:
-        """Connect to the best known network in reach, if any."""
+    def _try_known_networks(self, *, cached: bool = True) -> str | None:
+        """
+        Connect to the best known network in reach, if any.
+
+        ``cached``: use NetworkManager's last results if a new scan isn't possible.
+        """
         known = {n["ssid"]: n for n in self.known_networks()}
         candidates = [
             known[network["ssid"]]
-            for network in self.scan()
+            for network in self.scan(cached=cached)
             if network["ssid"] in known
         ]
         # highest priority first, scan order (signal) breaks ties
