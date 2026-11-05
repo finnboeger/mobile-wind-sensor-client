@@ -11,16 +11,21 @@ JSON endpoints below.
 import json
 import logging
 import math
+import socket
+import threading
 import time
 from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, cast
+from typing import Any, Final, cast
 from urllib.parse import parse_qs, urlparse
 
 from .history import MeasurementHistory
 
 logger = logging.getLogger(__name__)
+
+#: seconds between checks whether the Wi-Fi interface appeared or changed
+INTERFACE_POLL_S: Final = 5
 
 
 def _finite(data: object) -> object:
@@ -41,9 +46,23 @@ class DashboardServer(ThreadingHTTPServer):
         self,
         address: tuple[str, int],
         history: MeasurementHistory,
+        interface: str | None = None,
     ) -> None:
+        #: only accept connections arriving on this network interface, e.g. so the
+        #: dashboard isn't reachable over 4G. Unlike binding to the interface's
+        #: address, this keeps working when the address changes (hotspot or not).
+        self.interface = interface
         super().__init__(address, DashboardHandler)
         self.history = history
+
+    def server_bind(self) -> None:
+        if self.interface:
+            self.socket.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_BINDTODEVICE,
+                self.interface.encode(),
+            )
+        super().server_bind()
 
 
 class RequestError(Exception):
@@ -133,5 +152,92 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
 
 def serve(server: DashboardServer) -> None:
-    logger.info("Dashboard listening on port %d", server.server_address[1])
+    logger.info(
+        "Dashboard listening on port %d of %s",
+        server.server_address[1],
+        server.interface or "every interface",
+    )
     server.serve_forever()
+
+
+class InterfaceServer:
+    """
+    Serve the dashboard on one network interface for as long as it exists.
+
+    ``SO_BINDTODEVICE`` remembers the interface's index, not its name. When the
+    interface disappears and comes back (e.g. after a Wi-Fi firmware crash or a
+    driver reload) it gets a new index, and the old socket accepts nothing anymore.
+    So the server is only started once the interface exists, and restarted whenever
+    its index changes. Without the interface nothing is served, instead of falling
+    back to every interface (4G included).
+    """
+
+    def __init__(
+        self,
+        interface: str,
+        port: int,
+        make_server: Callable[[tuple[str, int], str], DashboardServer],
+        if_index: Callable[[str], int] = socket.if_nametoindex,
+    ) -> None:
+        self.interface = interface
+        self.port = port
+        self.server: DashboardServer | None = None
+        self._make_server = make_server
+        self._if_index = if_index
+        #: index of the interface at the last check, -1 before the first one
+        self._index: int | None = -1
+        self._start_failed = False
+
+    def check(self) -> None:
+        """Start, restart or stop the server to match the interface."""
+        try:
+            index: int | None = self._if_index(self.interface)
+        except OSError:
+            index = None
+        if index != self._index:
+            if self._index not in (-1, None):
+                logger.warning(
+                    "Network interface %s changed, restarting the dashboard on it",
+                    self.interface,
+                )
+            self._stop()
+            self._index = index
+            self._start_failed = False
+            if index is None:
+                logger.error(
+                    "Network interface %s not found, the dashboard is only reachable "
+                    "on localhost until it appears",
+                    self.interface,
+                )
+        if index is not None and self.server is None:
+            self._start()
+
+    def run(self, stop: threading.Event | None = None) -> None:
+        """Check the interface every few seconds until ``stop`` is set."""
+        stop = stop or threading.Event()
+        while True:
+            self.check()
+            if stop.wait(INTERFACE_POLL_S):
+                self._stop()
+                return
+
+    def _start(self) -> None:
+        try:
+            self.server = self._make_server(("", self.port), self.interface)
+        except OSError:
+            # retried on the next check, but only logged once
+            if not self._start_failed:
+                logger.exception(
+                    "Could not start the dashboard on port %d of %s",
+                    self.port,
+                    self.interface,
+                )
+                self._start_failed = True
+            return
+        threading.Thread(target=serve, args=(self.server,), daemon=True).start()
+
+    def _stop(self) -> None:
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.server = None

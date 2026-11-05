@@ -39,6 +39,8 @@ class NetworkConfig:
     ENABLE_LOCAL_WEBSERVER: bool
     #: TCP port of the local dashboard
     WEBSERVER_PORT: int
+    #: Wi-Fi interface, the only one besides localhost the dashboard listens on
+    WIFI_INTERFACE: str
     AP_SSID: str | None
     AP_PASSWORD: str | None
 
@@ -188,6 +190,7 @@ class Config:
             ],
             ENABLE_LOCAL_WEBSERVER=enable_webserver,
             WEBSERVER_PORT=webserver_port or 80,
+            WIFI_INTERFACE=get(config, "NETWORK", "WIFI_INTERFACE", str, "wlan0"),
             AP_SSID=get_optional(config, "NETWORK", "AP_SSID", str),
             AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),
         )

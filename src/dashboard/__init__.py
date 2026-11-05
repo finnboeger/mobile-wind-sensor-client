@@ -5,7 +5,6 @@ It shows the same wind data as the online dashboard without a trip through the
 internet.
 """
 
-import logging
 import threading
 from collections.abc import Callable
 
@@ -14,23 +13,20 @@ from config import NetworkConfig
 
 from . import history, server
 
-logger = logging.getLogger(__name__)
-
 
 def init(network_config: NetworkConfig) -> Callable[[Second], None]:
     """Start the dashboard webserver and return where the seconds go."""
     measurements = history.MeasurementHistory()
 
-    try:
-        dashboard_server = server.DashboardServer(
-            ("", network_config.WEBSERVER_PORT),
-            measurements,
-        )
-    except OSError:
-        logger.exception(
-            "Could not start the dashboard on port %d",
+    def make_server(address: tuple[str, int], interface: str) -> server.DashboardServer:
+        return server.DashboardServer(address, measurements, interface)
+
+    # lo for e.g. curl on the Pi itself, whose own connections arrive on it
+    for interface in ("lo", network_config.WIFI_INTERFACE):
+        watcher = server.InterfaceServer(
+            interface,
             network_config.WEBSERVER_PORT,
+            make_server,
         )
-        return measurements.add_second
-    threading.Thread(target=server.serve, args=(dashboard_server,), daemon=True).start()
+        threading.Thread(target=watcher.run, daemon=True).start()
     return measurements.add_second
