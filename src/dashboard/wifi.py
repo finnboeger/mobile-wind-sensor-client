@@ -1,12 +1,12 @@
 """
-Wi-Fi status and changes through NetworkManager (``nmcli``).
+Wi-Fi management through NetworkManager (``nmcli``).
 
-:class:`WifiManager` reads the state of the Wi-Fi interface when the dashboard asks
-for it, so it can show which network it is connected to, the known networks and the
-networks in reach. Nothing runs while nobody looks, since every ``nmcli`` costs
-noticeable CPU on a Pi Zero. Changes, e.g. connecting to a known network or opening
-an access point ("hotspot") serving the local dashboard, run one at a time in a
-background thread.
+The Wi-Fi interface is either connected to a known network or, if none is in reach,
+runs an access point ("hotspot") serving the local dashboard. :class:`WifiManager`
+watches the interface every few seconds, also while nobody looks at the dashboard,
+and opens the hotspot once no network was connected for a while. The dashboard uses
+it to switch between both and to manage the known networks. Changes run one at a
+time in a background thread.
 
 The hotspot uses NetworkManager's ``shared`` mode, which runs a DHCP server on
 10.42.0.1/24 and forwards traffic to the internet. ``scripts/setup-hotspot.sh``
@@ -40,15 +40,23 @@ FORWARDING_BLOCK_TABLE = "windbot_hotspot"
 DEFAULT_AP_PASSWORD = "WindSensor"  # noqa: S105  # nosec B105
 #: NetworkManager device states, see `nmcli device status`
 STATE_UNAVAILABLE = 20
+STATE_DISCONNECTED = 30
 STATE_CONNECTED = 100
-#: seconds the state of the interface is cached
-STATE_CACHE_SECONDS = 3
 #: seconds the list of known networks is cached
 NETWORKS_CACHE_SECONDS = 10
+#: seconds an activating connection may hold off the hotspot past its deadline
+ACTIVATION_GRACE_SECONDS = 60
 #: seconds nmcli waits for a connection to come up
 CONNECT_TIMEOUT_SECONDS = 30
+#: seconds between two checks of the interface in the background
+SUPERVISION_INTERVAL_SECONDS = 10
 #: nice value of the Wi-Fi threads, so they don't slow down the wind processing
 BACKGROUND_NICE = 10
+#: checks in a row that must miss the forwarding block before the hotspot is closed,
+#: so a single failed nft call doesn't drop the connected phones
+BLOCK_CHECK_FAILURES = 2
+#: seconds the signal strength of the connected network is cached
+SIGNAL_CACHE_SECONDS = 3
 WIFI_TYPE = "802-11-wireless"
 MAX_SSID_LENGTH = 32
 MIN_PSK_LENGTH = 8
@@ -150,6 +158,8 @@ class WifiStatus:
     ssid: str | None = None
     address: str | None = None
     signal: int | None = None
+    #: monotonic time at which the hotspot will be opened
+    hotspot_deadline: float | None = None
     #: description of the action that is currently running
     action: str | None = None
     message: str | None = None
@@ -172,7 +182,12 @@ class WifiManager:
         self._lock = threading.RLock()
         self._action_lock = threading.Lock()
         self._status = WifiStatus()
-        self._state_time: float | None = None
+        self._had_first_deadline = False
+        #: checks in a row that missed the forwarding block while the hotspot was up
+        self._block_check_failures = 0
+        #: whether the missing forwarding block was logged, so it's logged only once
+        self._reported_unblocked = False
+        self._signal_time: float | None = None
         self._networks_time: float | None = None
 
     # ------------------------------------------------------------------ queries
@@ -319,11 +334,6 @@ class WifiManager:
         with self._lock:
             now = self._clock()
             if (
-                self._state_time is None
-                or now - self._state_time >= STATE_CACHE_SECONDS
-            ):
-                self.tick()
-            if (
                 self._status.mode != "unavailable"
                 and (
                     self._networks_time is None
@@ -337,12 +347,24 @@ class WifiManager:
                 except WifiError as e:
                     logger.warning("Could not list the known networks: %s", e)
             status = self._status
+            # read when asked, so the supervision doesn't run nmcli for it
+            if status.mode == "client" and (
+                self._signal_time is None
+                or now - self._signal_time >= SIGNAL_CACHE_SECONDS
+            ):
+                status.signal = self._current_signal()
+                self._signal_time = now
+            deadline = status.hotspot_deadline
             return {
                 "mode": status.mode,
                 "ssid": status.ssid,
                 "address": status.address,
                 "signal": status.signal,
                 "clients": status.clients,
+                "hotspot_in": (
+                    max(0, round(deadline - now)) if deadline is not None else None
+                ),
+                "hotspot_enabled": self.config.ENABLE_HOTSPOT,
                 "hotspot_ssid": self.config.AP_SSID,
                 "hotspot_address": HOTSPOT_ADDRESS,
                 "action": status.action,
@@ -354,31 +376,157 @@ class WifiManager:
     # ------------------------------------------------------------- supervision
 
     def tick(self) -> None:
-        """Update the status."""
+        """
+        Update the status and open the hotspot when its deadline has passed.
+
+        An open hotspot is closed if its forwarding block disappeared, e.g. because
+        another firewall tool flushed the rules.
+        """
+        if self._action_lock.locked():
+            return
+        try:
+            self._supervise()
+        except WifiBusyError:
+            # a dashboard request started a change since the check above
+            logger.debug("A Wi-Fi change started meanwhile, skipping this check")
+
+    def _supervise(self) -> None:
         device = self.device_state()
         with self._lock:
-            self._state_time = self._clock()
             status = self._status
-            # STATE_UNAVAILABLE is e.g. the Wi-Fi switched off
+            self._show_device(device)
+            if status.mode != "hotspot":
+                self._block_check_failures = 0
             if device is None or device.state <= STATE_UNAVAILABLE:
-                status.mode = "unavailable"
-                status.ssid = status.address = status.signal = None
-            elif device.state == STATE_CONNECTED:
-                status.address = device.address
-                if device.connection == HOTSPOT_CONNECTION:
-                    status.mode = "hotspot"
-                    status.ssid = self.config.AP_SSID
-                    status.signal = None
-                    status.clients = self.hotspot_clients()
-                else:
-                    status.mode = "client"
-                    status.ssid = device.connection
-                    status.signal = self._current_signal()
-                    status.clients = None
-            else:
-                status.mode = "searching"
-                status.ssid = device.connection
-                status.address = status.signal = status.clients = None
+                return
+            if device.state == STATE_CONNECTED:
+                status.hotspot_deadline = None
+                self._had_first_deadline = True
+                if status.mode == "client" or not self._block_lost():
+                    return
+            elif not self._hotspot_due(device) or not self._can_open_hotspot():
+                return
+        if status.mode == "hotspot":
+            logger.error(
+                "Forwarding from the hotspot isn't blocked anymore, closing it",
+            )
+            self._run_action("Closing the hotspot", self._close_unblocked_hotspot)
+            return
+        logger.info("No Wi-Fi network connected, opening the hotspot")
+
+        def action() -> str:
+            try:
+                self._start_hotspot()
+            except WifiError:
+                self._restart_deadline()
+                raise
+            return "No known network connected, so the hotspot was opened."
+
+        self._run_action("Opening the hotspot", action)
+
+    def _show_device(self, device: DeviceState | None) -> None:
+        """Update the status from the state of the interface."""
+        status = self._status
+        if device is None or device.state <= STATE_UNAVAILABLE:
+            # STATE_UNAVAILABLE is e.g. the Wi-Fi switched off
+            status.mode = "unavailable"
+            status.ssid = status.address = status.signal = status.clients = None
+            if device is not None:
+                # e.g. the Wi-Fi switched off: once it's back, NetworkManager gets its
+                # usual time to find a known network. Kept after a failed nmcli, which
+                # is usually a brief hiccup.
+                status.hotspot_deadline = None
+        elif device.state != STATE_CONNECTED:
+            status.mode = "searching"
+            status.ssid = device.connection
+            status.address = status.signal = status.clients = None
+        elif device.connection == HOTSPOT_CONNECTION:
+            status.mode = "hotspot"
+            status.ssid = self.config.AP_SSID
+            status.address = device.address
+            status.signal = None
+            status.clients = self.hotspot_clients()
+        else:
+            status.mode = "client"
+            status.ssid = device.connection
+            status.address = device.address
+            status.clients = None
+
+    def _refresh_status(self) -> None:
+        """Show the state right after an action, instead of after the next check."""
+        try:
+            device = self.device_state()
+            with self._lock:
+                self._show_device(device)
+        except Exception:
+            logger.exception("Could not read the Wi-Fi state")
+
+    def _block_lost(self) -> bool:
+        """Return whether the open hotspot's forwarding block is missing for good."""
+        if self.forwarding_blocked():
+            self._block_check_failures = 0
+            return False
+        self._block_check_failures += 1
+        if self._block_check_failures < BLOCK_CHECK_FAILURES:
+            logger.warning(
+                "Forwarding block of the hotspot not found, checking again before "
+                "closing it",
+            )
+            return False
+        self._block_check_failures = 0
+        return True
+
+    def _can_open_hotspot(self) -> bool:
+        """
+        Return whether forwarding from the hotspot is blocked, so it can be opened.
+
+        If not, e.g. on a git install without setup-hotspot.sh, it's logged once and
+        checked again after the fallback delay.
+        """
+        if self.forwarding_blocked():
+            self._reported_unblocked = False
+            return True
+        msg = (
+            "The hotspot stays closed because forwarding from it to the internet "
+            "isn't blocked. Run sudo scripts/setup-hotspot.sh."
+        )
+        if not self._reported_unblocked:
+            self._reported_unblocked = True
+            logger.warning(msg)
+        self._status.error = msg
+        self._restart_deadline()
+        return False
+
+    def _close_unblocked_hotspot(self) -> str:
+        """Close the hotspot, whose forwarding block disappeared, e.g. by a flush."""
+        self._restart_deadline()
+        self.nmcli("connection", "down", HOTSPOT_CONNECTION)
+        return (
+            "The hotspot was closed because forwarding from it to the internet wasn't "
+            "blocked anymore. Run sudo scripts/setup-hotspot.sh."
+        )
+
+    def _hotspot_due(self, device: DeviceState) -> bool:
+        """Return whether to open the hotspot, while no network is connected."""
+        status = self._status
+        if not self.config.ENABLE_HOTSPOT:
+            status.hotspot_deadline = None
+            return False
+        now = self._clock()
+        if status.hotspot_deadline is None:
+            delay = (
+                self.config.AP_FALLBACK_DELAY_SECONDS
+                if self._had_first_deadline
+                else self.config.AP_STARTUP_DELAY_SECONDS
+            )
+            self._had_first_deadline = True
+            status.hotspot_deadline = now + delay
+            logger.info("No Wi-Fi network connected, hotspot opens in %d s", delay)
+            return False
+        activating = STATE_DISCONNECTED < device.state < STATE_CONNECTED
+        return now >= status.hotspot_deadline and not (
+            activating and now < status.hotspot_deadline + ACTIVATION_GRACE_SECONDS
+        )
 
     def _current_signal(self) -> int | None:
         try:
@@ -386,6 +534,15 @@ class WifiManager:
         except WifiError:
             return None
         return next((n["signal"] for n in networks if n["in_use"]), None)
+
+    def run_forever(self, interval: float = SUPERVISION_INTERVAL_SECONDS) -> None:
+        lower_priority()
+        while True:
+            try:
+                self.tick()
+            except Exception:
+                logger.exception("Wi-Fi supervision failed")
+            time.sleep(interval)
 
     # ---------------------------------------------------------------- actions
 
@@ -425,8 +582,9 @@ class WifiManager:
         finally:
             with self._lock:
                 self._status.action = None
-                self._state_time = self._networks_time = None
+                self._networks_time = None
             self._action_lock.release()
+            self._refresh_status()
 
     def _in_background(
         self,
@@ -551,6 +709,8 @@ class WifiManager:
             HOTSPOT_CONNECTION,
             timeout=CONNECT_TIMEOUT_SECONDS + 5,
         )
+        with self._lock:
+            self._status.hotspot_deadline = None
 
     def _try_known_networks(self) -> str | None:
         """Connect to the best known network in reach, if any."""
@@ -583,48 +743,58 @@ class WifiManager:
         )
 
     def connect(self, uuid: str) -> None:
-        """Connect to a known network."""
+        """Connect to a known network. Reopens the hotspot if that fails."""
         network = next((n for n in self.known_networks() if n["uuid"] == uuid), None)
         if network is None:
             msg = "Unknown network."
             raise WifiRequestError(msg)
+        from_hotspot = self._status.mode == "hotspot"
 
         def action() -> str:
+            self._restart_deadline()
             try:
                 self._connect(uuid)
             except WifiError as e:
+                if from_hotspot and self.config.ENABLE_HOTSPOT:
+                    self._start_hotspot()
                 msg = f"Could not connect to {network['ssid']}: {e}"
                 raise WifiError(msg) from e
             return f"Connected to {network['ssid']}."
 
         self._in_background(f"Connecting to {network['ssid']}", action)
 
+    def _restart_deadline(self) -> None:
+        with self._lock:
+            self._status.hotspot_deadline = (
+                self._clock() + self.config.AP_FALLBACK_DELAY_SECONDS
+            )
+
     def start_hotspot(self) -> None:
         self._in_background("Opening the hotspot", self._start_hotspot)
 
     def stop_hotspot(self) -> None:
-        """Close the hotspot for a known network in reach, or open it again."""
+        """Close the hotspot and look for a known network."""
 
         def action() -> str:
+            self._restart_deadline()
             try:
                 self.nmcli("connection", "down", HOTSPOT_CONNECTION)
             except WifiError as e:
                 logger.info("Could not close the hotspot: %s", e)
-            connected = None
-            try:
-                connected = self._try_known_networks()
-            finally:
-                if connected is None:
-                    self._start_hotspot()
+            connected = self._try_known_networks()
+            self._restart_deadline()
+            if connected is not None:
+                return connected
             return (
-                connected or "No known network connected, so the hotspot is open again."
+                "No known network connected. The hotspot opens again in "
+                f"{self.config.AP_FALLBACK_DELAY_SECONDS} s."
             )
 
         self._in_background("Closing the hotspot", action)
 
 
 def init(network_config: NetworkConfig) -> WifiManager | None:
-    """Return the Wi-Fi manager, or None if NetworkManager isn't available."""
+    """Start watching the Wi-Fi, or return None if NetworkManager isn't available."""
     if shutil.which("nmcli") is None:
         logger.warning("nmcli not found, Wi-Fi management is disabled")
         return None
@@ -638,4 +808,6 @@ def init(network_config: NetworkConfig) -> WifiManager | None:
             "ADMIN_PASSWORD isn't set, anyone who can reach the dashboard can change "
             "the Wi-Fi",
         )
-    return WifiManager(network_config)
+    manager = WifiManager(network_config)
+    threading.Thread(target=manager.run_forever, daemon=True).start()
+    return manager

@@ -2,8 +2,8 @@
 Local dashboard served by the windbot itself.
 
 It shows the same wind data as the online dashboard without a trip through the
-internet, live values for debugging, and the state of the Wi-Fi, which can be
-changed there.
+internet, live values for debugging, and lets the Wi-Fi be managed. When the Wi-Fi
+isn't connected to a known network, an access point is opened to reach it.
 """
 
 import threading
@@ -16,7 +16,7 @@ from . import history, server, wifi
 
 
 def init(network_config: NetworkConfig) -> Callable[[Second], None]:
-    """Start the Wi-Fi watcher and the webserver, return where the seconds go."""
+    """Start the Wi-Fi supervision and the webserver, return where the seconds go."""
     wifi_manager = wifi.init(network_config)
 
     measurements = history.MeasurementHistory()

@@ -23,6 +23,13 @@
           </template>
           <div v-else-if="wifi.mode === 'searching'">
             <strong>{{ wifi.ssid ? `Connecting to ${wifi.ssid}…` : "Not connected" }}</strong>
+            <div v-if="wifi.hotspot_in != null" class="muted">
+              The hotspot opens in {{ formatAge(wifi.hotspot_in) }} unless a known network
+              connects.
+            </div>
+            <div v-else-if="!wifi.hotspot_enabled" class="muted">
+              The hotspot is disabled in config.ini.
+            </div>
           </div>
           <div v-else>The Wi-Fi interface isn't available.</div>
           <div v-if="wifi.action" class="banner">{{ wifi.action }}…</div>

@@ -7,6 +7,7 @@ import {
   type ScannedNetwork,
   type WifiStatus,
 } from "../api";
+import { formatAge } from "../format";
 
 export default defineComponent({
   setup() {
@@ -93,8 +94,7 @@ export default defineComponent({
       void wifiAction(
         "/api/wifi/connect",
         { uuid: network.uuid },
-        "If you are connected to the windbot through its current network, this page " +
-          `loses its connection.\n\nConnect to ${network.ssid}?`,
+        `${LOSE_CONNECTION}\n\nConnect to ${network.ssid}?`,
       );
     }
 
@@ -115,6 +115,7 @@ export default defineComponent({
       stopHotspot,
       startHotspot,
       connectTo,
+      formatAge,
     };
   },
 });

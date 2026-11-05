@@ -41,11 +41,17 @@ class NetworkConfig:
     WEBSERVER_PORT: int
     #: password required for changing the Wi-Fi settings on the dashboard
     ADMIN_PASSWORD: str | None
-    #: Wi-Fi interface: shown on the dashboard, and the only one besides localhost
-    #: that the dashboard listens on
+    #: open an access point when the Wi-Fi isn't connected to a network
+    ENABLE_HOTSPOT: bool
+    #: Wi-Fi interface used for both networks and the access point, and the only
+    #: one besides localhost that the dashboard listens on
     WIFI_INTERFACE: str
     AP_SSID: str
     AP_PASSWORD: str | None
+    #: seconds after startup to wait for a known network before opening the AP
+    AP_STARTUP_DELAY_SECONDS: int
+    #: seconds without a network connection before the AP is opened again
+    AP_FALLBACK_DELAY_SECONDS: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -195,9 +201,30 @@ class Config:
             WEBSERVER_PORT=webserver_port or 80,
             ADMIN_PASSWORD=get_optional(config, "NETWORK", "ADMIN_PASSWORD", str)
             or None,
+            ENABLE_HOTSPOT=get(
+                config,
+                "NETWORK",
+                "ENABLE_HOTSPOT",
+                parse_bool,
+                fallback=True,
+            ),
             WIFI_INTERFACE=get(config, "NETWORK", "WIFI_INTERFACE", str, "wlan0"),
             AP_SSID=get(config, "NETWORK", "AP_SSID", str, "WindSensor"),
             AP_PASSWORD=get_optional(config, "NETWORK", "AP_PASSWORD", str),
+            AP_STARTUP_DELAY_SECONDS=get(
+                config,
+                "NETWORK",
+                "AP_STARTUP_DELAY_SECONDS",
+                int,
+                60,
+            ),
+            AP_FALLBACK_DELAY_SECONDS=get(
+                config,
+                "NETWORK",
+                "AP_FALLBACK_DELAY_SECONDS",
+                int,
+                180,
+            ),
         )
         broker = (get_optional(config, "MQTT", "BROKER", str) or "").strip()
         mqtt_port = get(config, "MQTT", "PORT", str, "8883").strip()
