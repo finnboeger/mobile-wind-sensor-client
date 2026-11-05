@@ -88,6 +88,9 @@ export interface WifiStatus {
   signal: number | null;
   /** devices connected to the hotspot */
   clients: number | null;
+  /** seconds until the hotspot opens unless a known network connects */
+  hotspot_in: number | null;
+  hotspot_enabled: boolean;
   hotspot_ssid: string;
   hotspot_address: string;
   /** what the windbot is doing right now, e.g. connecting to a network */
