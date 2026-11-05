@@ -49,6 +49,12 @@ if [[ ! -f "$INSTALL_DIR/config.ini" ]]; then
 	cp "$INSTALL_DIR/config.default.ini" "$INSTALL_DIR/config.ini"
 fi
 
+# Also for windbots set up before the hotspot existed, so none of them opens a
+# hotspot that shares the 4G connection
+if ! sudo "$INSTALL_DIR/scripts/setup-hotspot.sh"; then
+	echo "Warning: scripts/setup-hotspot.sh failed, the windbot won't open its hotspot." >&2
+fi
+
 echo "Installed $(cat "$INSTALL_DIR/VERSION")"
 if systemctl is-active --quiet windbot; then
 	sudo systemctl restart windbot
