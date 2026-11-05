@@ -331,6 +331,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
         routes: dict[str, Callable[[dict[str, Any]], None]] = {
             "/api/wifi/hotspot": self._post_hotspot,
             "/api/wifi/connect": self._post_connect,
+            "/api/wifi/networks": self._post_network,
+            "/api/wifi/networks/delete": self._post_delete_network,
         }
         route = routes.get(urlparse(self.path).path)
 
@@ -444,6 +446,37 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _post_connect(self, data: dict[str, Any]) -> None:
         self._wifi().connect(str(data.get("uuid", "")))
         self._json({"ok": True}, HTTPStatus.ACCEPTED)
+
+    def _post_network(self, data: dict[str, Any]) -> None:
+        password = data.get("password")
+        if password is not None and not isinstance(password, str):
+            raise RequestError(HTTPStatus.BAD_REQUEST, "password needs to be text.")
+        priority = data.get("priority", 0)
+        # bool is an int in Python, but true isn't a priority
+        if not isinstance(priority, int) or isinstance(priority, bool):
+            raise RequestError(HTTPStatus.BAD_REQUEST, "priority needs a whole number.")
+        self._wifi().save_network(
+            str(data.get("ssid", "")),
+            password,
+            priority,
+            open_network=flag(data, "open", default=False),
+            autoconnect=flag(data, "autoconnect", default=True),
+            hidden=flag(data, "hidden", default=False),
+            uuid=str(data["uuid"]) if data.get("uuid") else None,
+        )
+        self._json({"ok": True})
+
+    def _post_delete_network(self, data: dict[str, Any]) -> None:
+        self._wifi().delete_network(str(data.get("uuid", "")))
+        self._json({"ok": True})
+
+
+def flag(data: dict[str, Any], key: str, *, default: bool) -> bool:
+    """Return a true/false field of a request, so the text "false" isn't true."""
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise RequestError(HTTPStatus.BAD_REQUEST, f"{key} needs true or false.")
+    return value
 
 
 def serve(server: DashboardServer) -> None:
