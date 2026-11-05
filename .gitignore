@@ -14,3 +14,7 @@ dist
 !*.log.*[^0-9]*
 config.ini
 workbench
+
+# built by src/dashboard/web (npm run build), shipped in the releases
+src/dashboard/static/
+node_modules

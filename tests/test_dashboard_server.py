@@ -1,9 +1,11 @@
+import gzip
 import json
 import socket
 import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +38,46 @@ def request(server: DashboardServer, path: str) -> tuple[int, dict]:
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as e:
         return e.code, json.loads(e.read())
+
+
+def get(server: DashboardServer, path: str) -> tuple[int, dict[str, str], bytes]:
+    url = f"http://127.0.0.1:{server.server_address[1]}{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:  # noqa: S310 # nosec B310
+            return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers), e.read()
+
+
+def test_index_not_built(server: DashboardServer, tmp_path: Path) -> None:
+    server.static_dir = tmp_path
+    status, _, body = get(server, "/")
+    assert status == 200
+    assert b"hasn't been built" in body
+
+
+def test_static_files(server: DashboardServer, tmp_path: Path) -> None:
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "index.html").write_text("<title>Windbot</title>")
+    (tmp_path / "assets" / "index-abc.js").write_text("console.log(1)")
+    server.static_dir = tmp_path
+    status, headers, body = get(server, "/")
+    assert body == b"<title>Windbot</title>"
+    assert headers["Cache-Control"] == "no-store"
+    status, headers, body = get(server, "/assets/index-abc.js")
+    assert status == 200
+    assert body == b"console.log(1)"
+    assert "javascript" in headers["Content-Type"]
+    assert "immutable" in headers["Cache-Control"]
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/assets/index-abc.js",
+        headers={"Accept-Encoding": "gzip"},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:  # noqa: S310 # nosec B310
+        assert response.headers["Content-Encoding"] == "gzip"
+        assert gzip.decompress(response.read()) == b"console.log(1)"
+    assert get(server, "/assets/missing.js")[0] == 404
+    assert get(server, "/assets/..%2Findex.html")[0] == 404
 
 
 def test_measurements(server: DashboardServer) -> None:

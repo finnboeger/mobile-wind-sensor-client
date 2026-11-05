@@ -28,3 +28,22 @@ jobs:
         run: .venv/bin/pre-commit run --all-files --show-diff-on-failure
       - name: Run Tests
         run: .venv/bin/pytest -vv
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/dashboard/web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/dashboard/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check and build the dashboard
+        run: npm run build
