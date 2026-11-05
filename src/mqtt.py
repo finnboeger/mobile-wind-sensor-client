@@ -1,6 +1,6 @@
 import json
 import logging
-import threading
+from collections.abc import Callable
 from ssl import PROTOCOL_TLS
 from typing import Any, Final
 
@@ -10,8 +10,7 @@ import paho.mqtt.properties as mqtt_properties
 import paho.mqtt.reasoncodes as mqtt_reasoncodes
 
 import aggregate
-from config import Config
-from structs import PositionQueue, WindOutputQueue
+from config import MQTTConfig
 
 logger = logging.getLogger(__name__)
 
@@ -131,26 +130,21 @@ def publish_message(
         )
 
 
-def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
-    config = Config()
-
-    if config.MQTT is None:
-        logger.warning("Attempted to start MQTT worker without a configured broker")
-        return
-
+def init(config: MQTTConfig) -> Callable[[aggregate.Second], None]:
+    """Connect to the broker in the background and return the publisher."""
     logger.debug(
         "Attempting to connect to MQTT broker at %s:%d",
-        config.MQTT.BROKER,
-        config.MQTT.PORT,
+        config.BROKER,
+        config.PORT,
     )
     client = mqtt.Client(
-        client_id=config.MQTT.CLIENT_ID,
+        client_id=config.CLIENT_ID,
         userdata=None,
         protocol=mqtt.MQTTv5,
     )
-    if config.MQTT.USE_TLS:
+    if config.USE_TLS:
         client.tls_set(tls_version=PROTOCOL_TLS)
-    client.username_pw_set(username=config.MQTT.USERNAME, password=config.MQTT.PASSWORD)
+    client.username_pw_set(username=config.USERNAME, password=config.PASSWORD)
     client.on_connect = connect_callback  # pyright: ignore[reportAttributeAccessIssue]
     client.on_connect_fail = connect_fail_callback
     client.on_disconnect = disconnect_callback  # pyright: ignore[reportAttributeAccessIssue]
@@ -160,25 +154,9 @@ def worker(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
     )
     # connect_async + loop_start retries forever, including the first connection.
     # A blocking connect() raises when the modem is not online yet (e.g. right
-    # after boot), which would end this thread and stop all MQTT uploads.
-    client.connect_async(config.MQTT.BROKER, config.MQTT.PORT, keepalive=KEEPALIVE_S)
+    # after boot), which would stop all MQTT uploads.
+    client.connect_async(config.BROKER, config.PORT, keepalive=KEEPALIVE_S)
     client.loop_start()
 
-    topic = config.MQTT.TOPIC
-    aggregate.run(
-        position_queue,
-        wind_queue,
-        lambda second: publish_message(client, topic, second),
-    )
-
-
-def init(position_queue: PositionQueue, wind_queue: WindOutputQueue) -> None:
-    worker_thread = threading.Thread(
-        target=worker,
-        args=(
-            position_queue,
-            wind_queue,
-        ),
-        daemon=True,
-    )
-    worker_thread.start()
+    topic = config.TOPIC
+    return lambda second: publish_message(client, topic, second)

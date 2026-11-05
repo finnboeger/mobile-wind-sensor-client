@@ -1,8 +1,10 @@
 import logging
 import logging.handlers
 import threading
+from collections.abc import Callable
 from queue import Queue
 
+import aggregate
 import gps
 import mqtt
 import nmea
@@ -65,13 +67,18 @@ if __name__ == "__main__":
     nmea_wind_queue: WindOutputQueue = Queue()
     wind_output_queues: list[WindOutputQueue] = [nmea_wind_queue]
 
-    if Config().MQTT is not None:
-        mqtt_position_queue: PositionQueue = Queue()
-        mqtt_wind_queue: WindOutputQueue = Queue()
-        position_output_queues.append(mqtt_position_queue)
-        wind_output_queues.append(mqtt_wind_queue)
+    # Everything that needs one second averages shares a single aggregator
+    second_consumers: list[Callable[[aggregate.Second], None]] = []
+    mqtt_config = Config().MQTT
+    if mqtt_config is not None:
+        second_consumers.append(mqtt.init(mqtt_config))
 
-        mqtt.init(mqtt_position_queue, mqtt_wind_queue)
+    if second_consumers:
+        aggregate_position_queue: PositionQueue = Queue()
+        aggregate_wind_queue: WindOutputQueue = Queue()
+        position_output_queues.append(aggregate_position_queue)
+        wind_output_queues.append(aggregate_wind_queue)
+        aggregate.init(aggregate_position_queue, aggregate_wind_queue, second_consumers)
 
     gps.init(position_output_queues)
     n2k_node, heading_queue, wind_queue = nmea.init()
