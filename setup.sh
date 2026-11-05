@@ -17,6 +17,14 @@ Options:
 	-s, --ssid NAME           WiFi SSID
 	-p, --password VALUE      WiFi password
 	-P, --user-password VALUE System user password (username: pi)
+	    --hotspot-password VALUE
+	                          Password of the windbot's own Wi-Fi hotspot
+	                          (default: generated)
+	    --admin-password VALUE
+	                          Password for changing the Wi-Fi on the local dashboard
+	                          (default: generated)
+	    --no-admin-password   Don't set an admin password, so anyone who can reach
+	                          the dashboard can change the Wi-Fi
 	-g, --git                 Clone the repository instead of installing the latest
 	                          release (for development, the dashboard then has to be
 	                          built by hand)
@@ -148,6 +156,9 @@ WIFI_COUNTRY="${WIFI_COUNTRY:-DE}"
 SSID="${SSID:-}"
 WIFI_PASSWORD="${WIFI_PASSWORD:-}"
 USER_PASSWORD="${USER_PASSWORD:-}"
+HOTSPOT_PASSWORD="${HOTSPOT_PASSWORD:-}"
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+NO_ADMIN_PASSWORD="false"
 ASSUME_YES="false"
 INSTALL_FROM_GIT="false"
 AUTO_SDCARD="false"
@@ -198,6 +209,18 @@ while [[ $# -gt 0 ]]; do
 			USER_PASSWORD="$2"
 			shift 2
 			;;
+		--hotspot-password)
+			HOTSPOT_PASSWORD="$2"
+			shift 2
+			;;
+		--admin-password)
+			ADMIN_PASSWORD="$2"
+			shift 2
+			;;
+		--no-admin-password)
+			NO_ADMIN_PASSWORD="true"
+			shift
+			;;
 		-g|--git)
 			INSTALL_FROM_GIT="true"
 			shift
@@ -243,6 +266,28 @@ prompt_if_empty SSHPUBKEY "Path to public SSH key"
 prompt_if_empty SSID "WiFi SSID"
 prompt_if_empty WIFI_PASSWORD "WiFi password" true
 prompt_password_with_confirmation USER_PASSWORD "Password for the system user (pi)"
+
+# One password per windbot instead of the published default in config.default.ini.
+# Letters and digits only, without look-alikes, so they can be typed from a note.
+generate_password() {
+	LC_ALL=C tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789' </dev/urandom | head -c 12 || true
+}
+HOTSPOT_PASSWORD="${HOTSPOT_PASSWORD:-$(generate_password)}"
+if [[ "$NO_ADMIN_PASSWORD" == "true" ]]; then
+	ADMIN_PASSWORD=""
+else
+	ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(generate_password)}"
+fi
+if [[ ${#HOTSPOT_PASSWORD} -lt 8 || ${#HOTSPOT_PASSWORD} -gt 63 ]]; then
+	echo "The hotspot password needs 8 to 63 characters." >&2
+	exit 1
+fi
+for value in "$HOTSPOT_PASSWORD" "$ADMIN_PASSWORD"; do
+	if [[ "$value" =~ [^A-Za-z0-9._-] ]]; then
+		echo "Use only letters, digits, '.', '_' and '-' in the hotspot and admin passwords." >&2
+		exit 1
+	fi
+done
 
 if [[ -z "$SDCARD" ]]; then
 	SDCARD="$(mktemp -d /tmp/windbot-sdcard.XXXXXX)"
@@ -377,11 +422,17 @@ EOF
 cat <<EOF > "$SDCARD/home/pi/windbot-post-firstboot.sh"
 #!/bin/bash
 
-set -euox pipefail
+set -euo pipefail
 
 INSTALL_FROM_GIT="$INSTALL_FROM_GIT"
+# Only readable by pi and root, and the script deletes itself at the end
+HOTSPOT_PASSWORD="$HOTSPOT_PASSWORD"
+ADMIN_PASSWORD="$ADMIN_PASSWORD"
 EOF
 cat <<'EOF' >> "$SDCARD/home/pi/windbot-post-firstboot.sh"
+
+# Print each command, except the ones with the passwords
+set -x
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -427,12 +478,34 @@ UNIT
 systemctl enable windbot
 
 if [[ -f /home/pi/mobile-wind-sensor-client/config.default.ini ]] && [[ ! -f /home/pi/mobile-wind-sensor-client/config.ini ]]; then
-	cp /home/pi/mobile-wind-sensor-client/config.default.ini /home/pi/mobile-wind-sensor-client/config.ini
-	chown pi:pi /home/pi/mobile-wind-sensor-client/config.ini
+	install -m 600 -o pi -g pi /home/pi/mobile-wind-sensor-client/config.default.ini /home/pi/mobile-wind-sensor-client/config.ini
+	# A hotspot name per windbot, so boats in one harbour can be told apart and phones
+	# don't try a saved password on another windbot: the end of the Pi's serial number
+	SERIAL="$(tr -d '\0' < /sys/firmware/devicetree/base/serial-number 2>/dev/null || true)"
+	if [[ -n "$SERIAL" ]]; then
+		SSID_SUFFIX="$(printf '%s' "${SERIAL: -4}" | tr '[:lower:]' '[:upper:]')"
+		sed -i -e "s/^AP_SSID = .*/AP_SSID = WindSensor-$SSID_SUFFIX/" /home/pi/mobile-wind-sensor-client/config.ini
+	fi
+	set +x
+	sed -i -e "s/^AP_PASSWORD = .*/AP_PASSWORD = $HOTSPOT_PASSWORD/" /home/pi/mobile-wind-sensor-client/config.ini
+	# empty with --no-admin-password, then the entry stays commented out
+	if [[ -n "$ADMIN_PASSWORD" ]]; then
+		sed -i -e "s/^#ADMIN_PASSWORD =.*/ADMIN_PASSWORD = $ADMIN_PASSWORD/" /home/pi/mobile-wind-sensor-client/config.ini
+	fi
+	set -x
 fi
 
+# Prepare the Wi-Fi hotspot that serves the local dashboard without a network
+if [[ -x /home/pi/mobile-wind-sensor-client/scripts/setup-hotspot.sh ]]; then
+	/home/pi/mobile-wind-sensor-client/scripts/setup-hotspot.sh
+fi
+
+# It contains the passwords, which are in config.ini now
+rm -f -- "$0"
+echo "Done. This script deleted itself."
+
 EOF
-chmod 755 "$SDCARD/home/pi/windbot-post-firstboot.sh"
+chmod 700 "$SDCARD/home/pi/windbot-post-firstboot.sh"
 chown 1000:1000 "$SDCARD/home/pi/windbot-post-firstboot.sh"
 
 # Add WiFi connection for automatic connection via NetworkManager.
@@ -488,3 +561,7 @@ done
 set +x
 
 echo "Done. SD card setup completed successfully."
+echo
+echo "Note these down, they are also in config.ini on the windbot:"
+echo "  Hotspot password (network WindSensor-XXXX, XXXX = end of the Pi's serial number): $HOTSPOT_PASSWORD"
+echo "  Admin password for Wi-Fi changes on the dashboard:          ${ADMIN_PASSWORD:-none (--no-admin-password)}"

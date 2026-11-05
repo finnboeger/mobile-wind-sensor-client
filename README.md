@@ -51,6 +51,10 @@ In summary, it will
 - enable I2C, SPI, UART and CAN
 - set locale, timezone and keymap
 - setup the wifi
+- generate a password for the windbot's Wi-Fi hotspot and one for changing the Wi-Fi
+  on the local dashboard (`--hotspot-password` / `--admin-password` set your own,
+  `--no-admin-password` leaves the dashboard without one), and print both at the end.
+  Note them down; on the windbot they are only in `config.ini`.
 
 After the script has run, insert the SD Card into the Raspberry Pi, power it on and connect to it using `ssh` and the user `pi`. Then run the `windbot-post-firstboot.sh` script that can be found in the pi users home directory. This script will
 - generate the locales
@@ -59,14 +63,21 @@ After the script has run, insert the SD Card into the Raspberry Pi, power it on 
 - enable the canbus on system start
 - install the latest release of the windbot code to `mobile-wind-sensor-client` (with `--git` it clones the repository instead)
 - create and enable a systemd service to start the windbot code
-- copy `config.default.ini` to `config.ini` in `mobile-wind-sensor-client`
+- copy `config.default.ini` to `config.ini` in `mobile-wind-sensor-client`, readable
+  only by `pi` and root, with the generated hotspot and admin passwords and the
+  hotspot name `WindSensor-XXXX`, where `XXXX` is the end of the Pi's serial number
+- prepare the Pi for the Wi-Fi hotspot (`scripts/setup-hotspot.sh`): install
+  `dnsmasq-base`, `iw` and `nftables`, make the dashboard reachable as `windbot.lan`,
+  and block forwarding from the hotspot with `windbot-hotspot-firewall.service`, so
+  devices on it can't use the windbot's internet connection
+- delete itself, since it contains the passwords
 
 Lastly as a manual step, the values in the `config.ini` need to be set.
 
 ### Releases and updates
 A release is published by CI whenever the `version` in `pyproject.toml` changes to one without a release. It contains the code and the built dashboard, so built files are never committed.
 
-To update a Pi installed from a release, run `~/mobile-wind-sensor-client/update.sh` for the latest release or `update.sh 0.3.0` for a specific one. It keeps `config.ini`, the virtual environment and the logs, and restarts the service.
+To update a Pi installed from a release, run `~/mobile-wind-sensor-client/update.sh` for the latest release or `update.sh 0.3.0` for a specific one. It keeps `config.ini`, the virtual environment and the logs, runs `scripts/setup-hotspot.sh` (with `sudo`) so older windbots get the hotspot setup too, and restarts the service.
 
 A git checkout (`setup.sh --git`, for development) is updated with `git pull`. The dashboard has to be built there by hand.
 
