@@ -8,6 +8,7 @@ releases). It polls the JSON endpoints below.
 - ``GET /api/measurements?since=<ms>&limit=<n>``: one second records, see
   ``history.py``. ``limit`` keeps only the newest ``n`` of them.
 - ``GET /api/status``: live values of the pipeline and the system
+- ``GET /api/wifi``, ``GET /api/wifi/scan``: Wi-Fi status and networks in reach
 """
 
 import gzip
@@ -35,6 +36,7 @@ from config import Config
 
 from . import commands
 from .history import MeasurementHistory
+from .wifi import WifiError, WifiManager
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +183,7 @@ class DashboardServer(ThreadingHTTPServer):
         self,
         address: tuple[str, int],
         history: MeasurementHistory,
+        wifi: WifiManager | None,
         interface: str | None = None,
         static_dir: Path = STATIC_DIR,
     ) -> None:
@@ -193,6 +196,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.gzipped: dict[str, bytes] = {}
         super().__init__(address, DashboardHandler)
         self.history = history
+        self.wifi = wifi
         self.system = SystemInfo()
 
     def server_bind(self) -> None:
@@ -249,6 +253,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         body = json.dumps(_finite(data), separators=(",", ":")).encode()
         self._send(status, body, "application/json")
 
+    def _wifi(self) -> WifiManager:
+        if self.dashboard.wifi is None:
+            raise RequestError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "Wi-Fi management isn't available on this device.",
+            )
+        return self.dashboard.wifi
+
     # ----------------------------------------------------------------- routes
 
     def do_HEAD(self) -> None:  # noqa: N802
@@ -264,6 +276,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/index.html": self._get_index,
             "/api/measurements": self._get_measurements,
             "/api/status": self._get_status,
+            "/api/wifi": self._get_wifi,
+            "/api/wifi/scan": self._get_scan,
         }
         self._dispatch(routes.get(url.path), parse_qs(url.query))
 
@@ -275,6 +289,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             route(argument)
         except RequestError as e:
             self._json({"error": e.message}, e.status)
+        except WifiError as e:
+            # NetworkManager failed, not the request
+            self._json({"error": str(e)}, HTTPStatus.BAD_GATEWAY)
         except Exception:
             logger.exception("Dashboard request %s failed", self.path)
             self._json({"error": "Internal error."}, HTTPStatus.INTERNAL_SERVER_ERROR)
@@ -335,6 +352,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "system": self.dashboard.system.values(),
             },
         )
+
+    def _get_wifi(self, _: object) -> None:
+        self._json(self._wifi().status())
+
+    def _get_scan(self, _: object) -> None:
+        self._json({"networks": self._wifi().scan()})
 
 
 def serve(server: DashboardServer) -> None:

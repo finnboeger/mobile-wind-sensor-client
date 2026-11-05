@@ -1,0 +1,96 @@
+/* Styles shared by the Live and Wi-Fi tabs. The wind charts keep the styles of the
+   online dashboard in views/WindView.vue. */
+.page {
+  padding: 20px;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+.card h2 {
+  font-size: 1rem;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.muted {
+  color: #6b6f80;
+}
+.banner {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin: 10px 0;
+  background: #e8edfb;
+}
+.banner.bad {
+  background: rgba(255, 0, 0, 0.8);
+  color: #fff;
+}
+.banner.warn {
+  background: #fdf2e0;
+  color: #8a4b08;
+}
+.btn {
+  border: 1px solid #d9dbe3;
+  background: #fff;
+  color: inherit;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.btn.primary {
+  background: #5470c6;
+  border-color: #5470c6;
+  color: #fff;
+  font-weight: 600;
+}
+.btn.danger {
+  color: #c62828;
+}
+.btn.small {
+  padding: 4px 10px;
+  font-size: 0.85rem;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #e4e6ec;
+  margin-left: 6px;
+}
+.badge.good {
+  background: rgba(47, 133, 90, 0.15);
+  color: #2f855a;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid #e4e6ec;
+  vertical-align: middle;
+}
+th {
+  color: #6b6f80;
+  font-weight: 600;
+  font-size: 0.8rem;
+}

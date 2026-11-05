@@ -1,13 +1,15 @@
-<script lang="ts" src="./Root.ts"></script>
+<script lang="ts" src="./App.ts"></script>
 
 <template>
   <nav class="tabs">
     <button :class="{ active: tab === 'wind' }" @click="tab = 'wind'">Wind</button>
     <button :class="{ active: tab === 'live' }" @click="tab = 'live'">Live</button>
+    <button :class="{ active: tab === 'wifi' }" @click="tab = 'wifi'">Wi-Fi</button>
   </nav>
   <!-- kept alive so the history isn't loaded from the windbot again -->
   <WindView v-show="tab === 'wind'" />
   <LiveView v-if="tab === 'live'" />
+  <WifiView v-if="tab === 'wifi'" />
 </template>
 
 <style>

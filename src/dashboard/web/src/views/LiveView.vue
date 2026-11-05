@@ -1,8 +1,8 @@
 <script lang="ts" src="./LiveView.ts"></script>
 
 <template>
-  <main class="live">
-    <div v-if="unreachable" class="banner">The windbot can't be reached.</div>
+  <main class="page">
+    <div v-if="unreachable" class="banner bad">The windbot can't be reached.</div>
     <p v-else-if="!status" class="muted">Loading…</p>
     <div class="grid">
       <section v-for="card in cards" :key="card.title" class="card">
@@ -24,38 +24,6 @@
 </template>
 
 <style scoped>
-.live {
-  padding: 20px;
-}
-.banner {
-  background: rgba(255, 0, 0, 0.8);
-  color: #fff;
-  padding: 10px 20px;
-  border-radius: 8px;
-  margin-bottom: 16px;
-}
-.muted {
-  color: #6b6f80;
-}
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 16px;
-  align-items: start;
-}
-.card {
-  background: #fff;
-  border-radius: 12px;
-  padding: 16px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
-}
-.card h2 {
-  font-size: 1rem;
-  margin-bottom: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 .age {
   margin-left: auto;
   font-size: 0.75rem;

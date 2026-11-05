@@ -24,7 +24,7 @@ from tests.test_dashboard_history import second
 def server() -> Iterator[DashboardServer]:
     history = MeasurementHistory()
     history.add_second(second(1, 5.0, 45))
-    dashboard = DashboardServer(("127.0.0.1", 0), history)
+    dashboard = DashboardServer(("127.0.0.1", 0), history, None)
     thread = threading.Thread(target=dashboard.serve_forever, daemon=True)
     thread.start()
     yield dashboard
@@ -114,6 +114,12 @@ def test_status_replaces_nan(
     assert data["values"]["gps"]["satellites"] == 7
 
 
+def test_wifi_unavailable(server: DashboardServer) -> None:
+    status, data = request(server, "/api/wifi")
+    assert status == 503
+    assert "isn't available" in data["error"]
+
+
 def test_not_found(server: DashboardServer) -> None:
     status, _ = request(server, "/api/nope")
     assert status == 404
@@ -146,7 +152,7 @@ def test_interface_server_follows_the_interface() -> None:
     def make_server(_address: tuple[str, int], interface: str) -> DashboardServer:
         # Without SO_BINDTODEVICE, which only Linux has, so the test runs anywhere
         interfaces.append(interface)
-        return DashboardServer(("127.0.0.1", 0), history)
+        return DashboardServer(("127.0.0.1", 0), history, None)
 
     watcher = InterfaceServer("wlan0", 0, make_server, if_index)
     try:
