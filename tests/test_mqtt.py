@@ -1,4 +1,5 @@
 import json
+import math
 import socket
 import threading
 import time
@@ -7,8 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
+import aggregate
 import mqtt
 from structs import CorrectedApparentWindData, PositionData, TrueWindData
+from utils.vector import PolarCoordinates
 
 TIMEOUT_S = 10
 # MQTT v5 CONNACK: no session present, reason "Success", no properties
@@ -124,11 +127,47 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
             while packet_type != PUBLISH:
                 packet_type, body = _read_packet(conn)
 
-    # Shown on the local dashboard
-    assert mqtt.connection_status["state"] == "success"
-    assert mqtt.connection_status["error_count"] >= 1
+            # Shown on the local dashboard. Checked while the connection is
+            # still open: closing it makes the client report "fail". paho can
+            # send the PUBLISH before its network thread has handled the
+            # CONNACK and run the connect callback, so give it a moment.
+            deadline = time.monotonic() + TIMEOUT_S
+            while (
+                mqtt.connection_status["state"] != "success"
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.01)
+            assert mqtt.connection_status["state"] == "success"
+            assert mqtt.connection_status["error_count"] >= 1
 
     topic, payload = _parse_publish(body)
     assert topic == "test/topic"
     assert payload["timestamp"] == 1
     assert payload["true"]["speed"] == 4.0
+
+
+def test_publish_message_keeps_directions_below_360() -> None:
+    published: list[str] = []
+
+    class Client:
+        def publish(self, _topic: str, payload: str, qos: int) -> SimpleNamespace:  # noqa: ARG002
+            published.append(payload)
+            return SimpleNamespace(rc=mqtt.mqtt.MQTT_ERR_SUCCESS)
+
+    wind = PolarCoordinates(angle=math.radians(359.6), magnitude=4.0)
+    second = aggregate.Second(
+        timestamp_s=1,
+        true_wind=wind,
+        apparent_wind=wind,
+        position=aggregate.ShortPositionData(
+            latitude=54.0,
+            longitude=10.0,
+            speed=3.0,
+            true_course=359.7,
+        ),
+    )
+    mqtt.publish_message(Client(), "test/topic", second)  # type: ignore[arg-type]
+    payload = json.loads(published[0])
+    assert payload["true"]["direction"] == 0
+    assert payload["apparent"]["direction"] == 0
+    assert payload["gps"]["heading"] == 0
