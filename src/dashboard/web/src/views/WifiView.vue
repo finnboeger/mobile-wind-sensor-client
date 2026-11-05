@@ -14,6 +14,13 @@
             </div>
             <div class="muted">Address {{ wifi.address ?? "—" }}</div>
           </template>
+          <template v-else-if="wifi.mode === 'hotspot'">
+            <div>
+              <strong>Hotspot "{{ wifi.hotspot_ssid }}" is open</strong>
+              <template v-if="wifi.clients != null"> · {{ wifi.clients }} device(s)</template>
+            </div>
+            <div class="muted">Dashboard at http://{{ wifi.hotspot_address }}</div>
+          </template>
           <div v-else-if="wifi.mode === 'searching'">
             <strong>{{ wifi.ssid ? `Connecting to ${wifi.ssid}…` : "Not connected" }}</strong>
           </div>
@@ -22,6 +29,19 @@
           <div v-if="wifi.message" class="banner">{{ wifi.message }}</div>
           <div v-if="wifi.error" class="banner bad">{{ wifi.error }}</div>
           <div v-if="wifiError" class="banner bad">{{ wifiError }}</div>
+          <div class="actions">
+            <button v-if="wifi.mode === 'hotspot'" class="btn" :disabled="busy" @click="stopHotspot">
+              Turn off hotspot and join a known network
+            </button>
+            <button
+              v-if="wifi.mode !== 'hotspot' && wifi.mode !== 'unavailable'"
+              class="btn"
+              :disabled="busy"
+              @click="startHotspot"
+            >
+              Open hotspot now
+            </button>
+          </div>
         </template>
       </section>
 
@@ -83,6 +103,12 @@
 </template>
 
 <style scoped>
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
 .row-actions {
   text-align: right;
 }

@@ -129,20 +129,20 @@ def test_wifi_unavailable(server: DashboardServer) -> None:
 
 
 def test_post_requires_json_and_password(server: DashboardServer) -> None:
-    body = {"uuid": "u-home"}
+    body = {"action": "start"}
     status, _ = request(
         server,
-        "/api/wifi/connect",
+        "/api/wifi/hotspot",
         body,
         {"Content-Type": "text/plain"},
     )
     assert status == 415
     json_header = {"Content-Type": "application/json"}
-    status, _ = request(server, "/api/wifi/connect", body, json_header)
+    status, _ = request(server, "/api/wifi/hotspot", body, json_header)
     assert status == 401
     status, _ = request(
         server,
-        "/api/wifi/connect",
+        "/api/wifi/hotspot",
         body,
         {**json_header, "X-Admin-Password": "secret"},
     )
