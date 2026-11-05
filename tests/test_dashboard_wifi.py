@@ -1,12 +1,16 @@
 import logging
+import subprocess  # nosec B404
 import time
 from dataclasses import replace
 
 import pytest
 
 from config import NetworkConfig
+from dashboard import commands
 from dashboard.wifi import (
+    ACTIVE_CLIENT_SECONDS,
     HOTSPOT_CONNECTION,
+    KNOWN_NETWORK_RETRY_SECONDS,
     WifiBusyError,
     WifiError,
     WifiManager,
@@ -49,6 +53,7 @@ class FakeNetworkManager:
         self.commands: list[list[str]] = []
         self.hotspot: list[str] | None = None
         self.fail_device_show = False
+        self.fail_rescan = False
 
     def __call__(self, args: list[str], _timeout: float) -> str:  # noqa: C901, PLR0911, PLR0912
         self.commands.append(args)
@@ -68,6 +73,9 @@ class FakeNetworkManager:
                 "IP4.ADDRESS[1]:192.168.1.20/24\n"
             )
         if "device wifi list" in command:
+            if self.fail_rescan and args[-1] == "yes":
+                msg = "Scanning not allowed while the interface is busy"
+                raise WifiError(msg)
             return "".join(
                 f"{'*' if ssid == self.connection else ' '}:{ssid}:50:WPA2\n"
                 for ssid in self.in_reach
@@ -455,3 +463,80 @@ def test_missing_forwarding_block_is_logged_once(
     assert nm.connection == ""
     assert "setup-hotspot.sh" in manager.status()["error"]
     assert len([r for r in caplog.records if "setup-hotspot.sh" in r.message]) == 1
+
+
+def retry_after(clock: Clock) -> None:
+    clock.now += KNOWN_NETWORK_RETRY_SECONDS + 1
+
+
+def downs(nm: FakeNetworkManager) -> int:
+    return sum(c == ["connection", "down", HOTSPOT_CONNECTION] for c in nm.commands)
+
+
+def test_unused_hotspot_retries_known_networks(monkeypatch: pytest.MonkeyPatch) -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    nm.state, nm.connection = 100, HOTSPOT_CONNECTION
+    nm.in_reach = ["Elsewhere"]
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    stations = [[500]]
+    monkeypatch.setattr(manager, "hotspot_stations", lambda: stations[0])
+
+    manager.tick()
+    retry_after(clock)
+    manager.tick()
+    # a device uses the hotspot, so it stays and the wait starts again
+    assert downs(nm) == 0
+
+    stations[0] = [ACTIVE_CLIENT_SECONDS * 1000 + 1]  # connected, but idle
+    manager.tick()
+    retry_after(clock)
+    manager.tick()
+    # nothing in reach: closed, searched and opened again
+    assert downs(nm) == 1
+    assert nm.connection == HOTSPOT_CONNECTION
+    assert manager.status()["error"] is None
+
+    nm.in_reach = ["Marina"]
+    manager.tick()
+    retry_after(clock)
+    manager.tick()
+    assert nm.connection == "Marina"
+    assert manager.status()["message"] == "Connected to Marina."
+
+
+def test_retry_does_not_use_old_scan_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    nm, clock = FakeNetworkManager(), Clock()
+    nm.state, nm.connection = 100, HOTSPOT_CONNECTION
+    nm.in_reach = ["Marina"]  # what NetworkManager saw hours ago
+    nm.fail_rescan = True
+    manager = WifiManager(CONFIG, run=nm, clock=clock)
+    monkeypatch.setattr(manager, "hotspot_stations", list)
+
+    manager.tick()
+    retry_after(clock)
+    manager.tick()
+    assert downs(nm) == 1
+    assert nm.connection == HOTSPOT_CONNECTION
+    assert not any(c[3:5] == ["up", "uuid"] for c in nm.commands)
+    # the usual outcome of a retry, so not shown as an error
+    assert manager.status()["error"] is None
+
+
+def test_hotspot_stations_parses_inactive_times(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = (
+        "Station 12:34:56:78:9a:bc (on wlan0)\n"
+        "\tinactive time:\t304 ms\n"
+        "\trx bytes:\t1234\n"
+        "Station 12:34:56:78:9a:bd (on wlan0)\n"
+        "\tinactive time:\t120000 ms\n"
+        "Station 12:34:56:78:9a:be (on wlan0)\n"
+    )
+    monkeypatch.setattr(
+        commands,
+        "run",
+        lambda *_args: subprocess.CompletedProcess([], 0, output, ""),
+    )
+    manager = WifiManager(CONFIG, run=FakeNetworkManager(), clock=Clock())
+    assert manager.hotspot_stations() == [304, 120000, 0]
