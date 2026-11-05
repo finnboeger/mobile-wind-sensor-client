@@ -33,3 +33,42 @@ export async function fetchMeasurements(
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as MeasurementsResponse;
 }
+
+/** A section of src/telemetry.py: live values of one part of the pipeline */
+export type TelemetrySection = Record<string, unknown> & {
+  /** ms since epoch */
+  updated?: number;
+};
+
+export interface StatusResponse {
+  /** ms since epoch */
+  server_time: number;
+  values: Record<string, TelemetrySection>;
+  mqtt: {
+    enabled: boolean;
+    broker?: string;
+    topic?: string;
+    state?: string | null;
+    error_count?: number;
+  };
+  system: {
+    uptime: number | null;
+    load: number | null;
+    cpu_temperature: number | null;
+    memory_total_mb: number | null;
+    memory_available_mb: number | null;
+    interfaces: { name: string; up: boolean; addresses: string[] }[];
+    throttled: string | null;
+    /** null until the values were read once */
+    disk_free_mb: number | null;
+    disk_total_mb: number | null;
+  };
+}
+
+export async function fetchStatus(): Promise<StatusResponse> {
+  const response = await fetch("/api/status", {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as StatusResponse;
+}

@@ -7,6 +7,7 @@ import n2k
 
 import config
 import log
+import telemetry
 from structs import (
     ApparentWindData,
     CorrectedApparentWindData,
@@ -46,6 +47,16 @@ def read_position_queue(
         latest_position_time = position.timestamp
 
     return movement_buffer, latest_position_time
+
+
+def publish_apparent_wind(apparent_wind: ApparentWindData) -> None:
+    """Publish the latest apparent wind for the local dashboard."""
+    telemetry.update(
+        "apparent_wind",
+        speed=apparent_wind.wind_speed,
+        angle=math.degrees(apparent_wind.wind_angle) % 360,
+        timestamp=apparent_wind.timestamp,
+    )
 
 
 class WindBuffer:
@@ -95,6 +106,8 @@ def worker(
     # store the wind vectors of the last few seconds to compute an average
     true_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_MILLISECONDS)
     apparent_wind_buffer = WindBuffer(max_age=WIND_AVERAGING_MILLISECONDS)
+    # the heading itself is published by nmea.py as it arrives
+    telemetry.set_values("heading", compass_offset=math.degrees(COMPASS_OFFSET))
 
     while True:
         # get wind data, blocking
@@ -126,6 +139,7 @@ def worker(
                 )
                 / movement_buffer_length
             )
+        publish_apparent_wind(current_apparent_wind)
 
         # assert that both position and compass data are not None
         if (
@@ -133,6 +147,18 @@ def worker(
             or latest_position_time is None
             or current_heading is None
         ):
+            telemetry.update(
+                "true_wind",
+                waiting_for=[
+                    name
+                    for name, value in (
+                        ("position", latest_position_time),
+                        ("velocity", current_movement_vector),
+                        ("heading", current_heading),
+                    )
+                    if value is None
+                ],
+            )
             continue
 
         # assert that both position and compass data are up to date
@@ -151,6 +177,19 @@ def worker(
                 latest_position_time,
                 current_heading.timestamp,
                 current_apparent_wind.timestamp,
+            )
+            telemetry.increment("true_wind", "skipped_stale")
+            telemetry.set_values(
+                "true_wind",
+                waiting_for=[
+                    name
+                    for name, timestamp in (
+                        ("up-to-date position", latest_position_time),
+                        ("up-to-date heading", current_heading.timestamp),
+                    )
+                    if timestamp
+                    < current_apparent_wind.timestamp - maximum_allowed_offset
+                ],
             )
             continue
 
@@ -185,6 +224,16 @@ def worker(
         )
 
         log.data("true_wind", average_true_wind)
+        current_true_wind_polar = current_true_wind_vector.to_polar()
+        telemetry.update(
+            "true_wind",
+            waiting_for=[],
+            speed=current_true_wind_polar.magnitude,
+            direction=math.degrees(current_true_wind_polar.angle),
+            average_speed=average_true_wind.wind_speed,
+            average_direction=math.degrees(average_true_wind.wind_angle),
+            timestamp=current_apparent_wind.timestamp,
+        )
 
         if logger.getEffectiveLevel() <= logging.DEBUG:
             logger.debug(

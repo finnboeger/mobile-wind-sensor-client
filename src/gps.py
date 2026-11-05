@@ -13,6 +13,7 @@ import serial
 import clock
 import config
 import log
+import telemetry
 from structs import PositionData
 from ubx.hnr_pvt import UbxHnrPvt, parse_ubx_hnr_pvt_message
 from ubx.nav_dgps import parse_ubx_nav_dgps_message
@@ -160,6 +161,7 @@ def reader_thread(queue: Queue[pyubx2.UBXMessage]) -> None:
 
 def wait_for_gps_fix(queue: Queue[pyubx2.UBXMessage]) -> None:
     start = time.time()
+    telemetry.update("gps", waiting_for_fix=True)
 
     while True:
         message = queue.get()
@@ -167,7 +169,13 @@ def wait_for_gps_fix(queue: Queue[pyubx2.UBXMessage]) -> None:
         if message.identity != "NAV-PVT":
             continue
 
-        if parse_ubx_nav_pvt_message(message).fix_type in (
+        nav_pvt_message = parse_ubx_nav_pvt_message(message)
+        telemetry.update(
+            "gps",
+            fix_type=nav_pvt_message.fix_type.name,
+            satellites=nav_pvt_message.num_sv,
+        )
+        if nav_pvt_message.fix_type in (
             GnssFixType.FIX_2D,
             GnssFixType.FIX_3D,
             GnssFixType.GNSS_AND_DEAD_RECKONING,
@@ -176,6 +184,7 @@ def wait_for_gps_fix(queue: Queue[pyubx2.UBXMessage]) -> None:
                 "GPS Fix found, took %.1f seconds",
                 round(time.time() - start, ndigits=1),
             )
+            telemetry.update("gps", waiting_for_fix=False)
             return
 
 
@@ -290,6 +299,22 @@ def worker(
         last_position = position
 
         log.data("position", position)
+        telemetry.update(
+            "gps",
+            valid=position.valid,
+            fix_type=message.fix_type.name,
+            satellites=number_of_satellites_used,
+            latitude=position.latitude,
+            longitude=position.longitude,
+            speed=position.speed,
+            course=position.true_course,
+            pdop=positional_dilution_of_precision,
+            hdop=horizontal_dilution_of_precision,
+            timestamp=position.timestamp,
+            # the wind is timestamped with the system clock, the positions with
+            # GPS time, so a wrong system clock makes the wind look outdated
+            clock_offset_ms=int(time.time() * 1000) - position.timestamp,
+        )
         if position.valid:
             for queue in output_queues:
                 queue.put(position)
