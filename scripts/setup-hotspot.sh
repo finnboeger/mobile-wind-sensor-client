@@ -9,6 +9,7 @@
 # - lets devices on the hotspot reach the dashboard as http://windbot.lan
 # - stops NetworkManager from forwarding traffic from the hotspot to the internet
 #   (e.g. over 4G), so phones don't use up the windbot's mobile data
+# - sets DNS servers that work over 4G too, while wlan0 runs the hotspot
 #
 # The post-first-boot script of setup.sh and update.sh run it, by hand:
 # sudo ./scripts/setup-hotspot.sh
@@ -88,6 +89,21 @@ UNIT
 systemctl daemon-reload
 systemctl enable windbot-hotspot-firewall.service
 systemctl restart windbot-hotspot-firewall.service
+
+# DNS servers that don't depend on the Wi-Fi. NetworkManager only writes the DNS of
+# the networks it manages to /etc/resolv.conf, and the 4G modem's usb0 isn't one of
+# them. Without these, the windbot can't resolve any name (e.g. the MQTT broker) once
+# wlan0 runs the hotspot or loses its network, although usb0 still has a route. They
+# replace the DNS servers of every network, so names only a Wi-Fi's router knows no
+# longer resolve. Only written if missing, so servers changed by hand are kept.
+DNS_CONF=/etc/NetworkManager/conf.d/90-windbot-dns.conf
+if [[ ! -e $DNS_CONF ]]; then
+	cat <<'CONF' > "$DNS_CONF"
+# Written by mobile-wind-sensor-client/scripts/setup-hotspot.sh
+[global-dns-domain-*]
+servers=1.1.1.1,8.8.8.8
+CONF
+fi
 
 nmcli radio wifi on
 systemctl reload NetworkManager
