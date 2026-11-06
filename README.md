@@ -69,7 +69,11 @@ The Wi-Fi management uses NetworkManager (`nmcli`) and needs root, which the
 `dnsmasq-base`, `iw` and `nftables`, adds the `windbot.lan` name and blocks forwarding
 from the access point with a service that loads the rules at boot. The windbot
 doesn't open the access point without that block, and closes it if the block
-disappears while it is open. The post-first-boot script and
+disappears while it is open. It also sets fixed DNS servers (1.1.1.1 and 8.8.8.8, in
+`/etc/NetworkManager/conf.d/90-windbot-dns.conf`): NetworkManager doesn't manage the
+4G modem's `usb0`, so without them nothing resolves once `wlan0` runs the access
+point. They replace the DNS servers of every network; edit the file to use others,
+the script keeps it. The post-first-boot script and
 `update.sh` run it; on a git checkout run `sudo ./scripts/setup-hotspot.sh` once.
 
 ## Bill of Materials
@@ -125,8 +129,9 @@ After the script has run, insert the SD Card into the Raspberry Pi, power it on 
   hotspot name `WindSensor-XXXX`, where `XXXX` is the end of the Pi's serial number
 - prepare the Pi for the Wi-Fi hotspot (`scripts/setup-hotspot.sh`): install
   `dnsmasq-base`, `iw` and `nftables`, make the dashboard reachable as `windbot.lan`,
-  and block forwarding from the hotspot with `windbot-hotspot-firewall.service`, so
-  devices on it can't use the windbot's internet connection
+  block forwarding from the hotspot with `windbot-hotspot-firewall.service`, so
+  devices on it can't use the windbot's internet connection, and set DNS servers that
+  also work over 4G
 - delete itself, since it contains the passwords
 
 Lastly as a manual step, the values in the `config.ini` need to be set.
