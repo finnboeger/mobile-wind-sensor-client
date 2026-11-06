@@ -325,6 +325,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
     start_paused: bool,
     features: list[str],
     jump_to: float | None,
+    current_timestamps: bool = False,
 ) -> None:
     init_logging()
 
@@ -348,6 +349,8 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
     if mqtt_config is not None:
         output_queues.append(mqtt_wind_queue)
         publish = mqtt.init(mqtt_config)
+        if current_timestamps:
+            publish = mqtt.with_current_timestamp(publish)
         aggregate.init(mqtt_position_queue, mqtt_wind_queue, [publish])
 
     threading.Thread(
@@ -656,6 +659,14 @@ def main() -> None:
             "(example: 2026-06-20T10:00:00Z)."
         ),
     )
+    parser.add_argument(
+        "--current-timestamps",
+        action="store_true",
+        help=(
+            "With --features mqtt, publish every record with the current time "
+            "instead of the recorded one, e.g. to test the uplink end to end."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -678,6 +689,9 @@ def main() -> None:
     if "mqtt" in features and Config().MQTT is None:
         msg = "--features mqtt needs MQTT.BROKER and a valid MQTT.PORT in config.ini"
         raise SystemExit(msg)
+    if args.current_timestamps and "mqtt" not in features:
+        msg = "--current-timestamps only applies to --features mqtt"
+        raise SystemExit(msg)
 
     curses.wrapper(
         run_tui,
@@ -687,6 +701,7 @@ def main() -> None:
         start_paused=bool(args.paused),
         features=features,
         jump_to=jump_time if args.jump is not None else None,
+        current_timestamps=bool(args.current_timestamps),
     )
 
 

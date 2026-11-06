@@ -1,6 +1,8 @@
 import json
 import logging
+import time
 from collections.abc import Callable
+from dataclasses import replace
 from ssl import PROTOCOL_TLS
 from typing import Any, Final
 
@@ -160,3 +162,18 @@ def init(config: MQTTConfig) -> Callable[[aggregate.Second], None]:
 
     topic = config.TOPIC
     return lambda second: publish_message(client, topic, second)
+
+
+def with_current_timestamp(
+    publish: Callable[[aggregate.Second], None],
+) -> Callable[[aggregate.Second], None]:
+    """
+    Wrap ``publish`` so every second goes out stamped with the current time.
+
+    Used by the replay to send old recordings through the uplink as if they were live.
+    """
+
+    def publish_now(second: aggregate.Second) -> None:
+        publish(replace(second, timestamp_s=int(time.time())))
+
+    return publish_now

@@ -165,3 +165,23 @@ def test_publish_message_keeps_directions_below_360() -> None:
     assert payload["true"]["direction"] == 0
     assert payload["apparent"]["direction"] == 0
     assert payload["gps"]["heading"] == 0
+
+
+def test_with_current_timestamp_replaces_only_the_timestamp() -> None:
+    published: list[aggregate.Second] = []
+    second = aggregate.Second(
+        timestamp_s=1_700_000_000,
+        true_wind=PolarCoordinates(angle=1.0, magnitude=5.0),
+        apparent_wind=PolarCoordinates(angle=0.5, magnitude=7.0),
+        position=None,
+    )
+
+    before = int(time.time())
+    mqtt.with_current_timestamp(published.append)(second)
+    after = int(time.time())
+
+    assert len(published) == 1
+    assert before <= published[0].timestamp_s <= after
+    assert published[0].true_wind == second.true_wind
+    assert published[0].apparent_wind == second.apparent_wind
+    assert published[0].position is None
