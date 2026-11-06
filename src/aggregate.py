@@ -146,6 +146,7 @@ class SecondAggregator:
         return self._finish()
 
     def _finish(self) -> list[Second]:
+        first_finish = self._finished_s is None
         finished = []
         for second in sorted(self._wind):
             if self._latest_wind_s is None or second >= self._latest_wind_s:
@@ -167,14 +168,32 @@ class SecondAggregator:
             )
             self._finished_s = second
         if self._finished_s is not None:
-            for old in [s for s in self._positions if s <= self._finished_s]:
-                logger.warning(
-                    "No data for timestamp %d. 0 Wind messages, %d Position messages",
-                    old,
-                    len(self._positions[old]),
-                )
-                del self._positions[old]
+            self._drop_windless(self._finished_s, first_finish=first_finish)
         return finished
+
+    def _drop_windless(self, finished_s: int, *, first_finish: bool) -> None:
+        """Drop the positions of finished seconds that had no wind, in one log line."""
+        dropped = sorted(s for s in self._positions if s <= finished_s)
+        if not dropped:
+            return
+        positions = sum(len(self._positions.pop(s)) for s in dropped)
+        if first_finish:
+            # At startup the GPS is usually ready before the wind, which waits for
+            # the wind sensor and the heading, so this is expected
+            logger.info(
+                "Wind started at %d, dropped %d positions of %d earlier seconds",
+                finished_s,
+                positions,
+                len(dropped),
+            )
+            return
+        logger.warning(
+            "No wind for %d seconds between %d and %d, dropped their %d positions",
+            len(dropped),
+            dropped[0],
+            dropped[-1],
+            positions,
+        )
 
 
 def run(
