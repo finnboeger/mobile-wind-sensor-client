@@ -164,16 +164,40 @@ def init(config: MQTTConfig) -> Callable[[aggregate.Second], None]:
     return lambda second: publish_message(client, topic, second)
 
 
-def with_current_timestamp(
-    publish: Callable[[aggregate.Second], None],
-) -> Callable[[aggregate.Second], None]:
+class LiveTimestamps:
     """
-    Wrap ``publish`` so every second goes out stamped with the current time.
+    Wrap a publisher so a replay goes out as if it were live.
 
-    Used by the replay to send old recordings through the uplink as if they were live.
+    Every second is shifted by one offset from recorded time to now, so seconds keep
+    their recorded spacing and never share a timestamp. Call :meth:`sync` with the
+    current replay time regularly. The offset only grows, so pausing leaves a gap
+    instead of sending timestamps from the past. Replaying faster than real time
+    would publish timestamps in the future, so the replay only allows 1x.
+
+    Seconds recorded before the first :meth:`sync` are dropped, e.g. the ones a
+    ``--jump`` fast-forwards through.
     """
 
-    def publish_now(second: aggregate.Second) -> None:
-        publish(replace(second, timestamp_s=int(time.time())))
+    def __init__(self, publish: Callable[[aggregate.Second], None]) -> None:
+        self._publish = publish
+        self._start_s: int | None = None
+        self._offset_s: float | None = None
 
-    return publish_now
+    def sync(self, replay_time_s: float) -> None:
+        """Align the offset so ``replay_time_s`` maps to the current time."""
+        offset_s = time.time() - replay_time_s
+        if self._offset_s is None:
+            self._start_s = int(replay_time_s)
+            self._offset_s = offset_s
+        else:
+            self._offset_s = max(self._offset_s, offset_s)
+
+    def __call__(self, second: aggregate.Second) -> None:
+        # read once, the replay thread updates it concurrently
+        offset_s = self._offset_s
+        if offset_s is None or self._start_s is None:
+            return
+        if second.timestamp_s < self._start_s:
+            return
+        shifted_s = int(second.timestamp_s + offset_s)
+        self._publish(replace(second, timestamp_s=shifted_s))

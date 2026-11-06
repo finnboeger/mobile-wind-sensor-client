@@ -12,10 +12,10 @@ Replay with a terminal UI:
 
 - `python src/replay.py` (uses paths from `config.ini`)
 - `python src/replay.py data_logs` (directory containing per-stream `*.log*` files)
-
 - `python src/replay.py data_logs --features mqtt --current-timestamps` (publishes to
-  MQTT like the windbot, but stamps every record with the current time, to test the
-  uplink end to end with old data)
+  MQTT like the windbot, but shifts every record to the current time, to test the
+  uplink end to end with old data; only at 1x speed, and nothing before `--jump` is
+  published)
 
 Controls: `space` play/pause, `n` step (paused), `+/-` change speed, `q` quit.
 

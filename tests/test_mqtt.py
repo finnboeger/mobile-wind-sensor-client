@@ -2,6 +2,7 @@ import json
 import math
 import socket
 import time
+from dataclasses import replace
 from queue import Queue
 from types import SimpleNamespace
 
@@ -167,21 +168,62 @@ def test_publish_message_keeps_directions_below_360() -> None:
     assert payload["gps"]["heading"] == 0
 
 
-def test_with_current_timestamp_replaces_only_the_timestamp() -> None:
-    published: list[aggregate.Second] = []
-    second = aggregate.Second(
-        timestamp_s=1_700_000_000,
+def _second(timestamp_s: int) -> aggregate.Second:
+    return aggregate.Second(
+        timestamp_s=timestamp_s,
         true_wind=PolarCoordinates(angle=1.0, magnitude=5.0),
         apparent_wind=PolarCoordinates(angle=0.5, magnitude=7.0),
         position=None,
     )
 
-    before = int(time.time())
-    mqtt.with_current_timestamp(published.append)(second)
-    after = int(time.time())
 
-    assert len(published) == 1
-    assert before <= published[0].timestamp_s <= after
-    assert published[0].true_wind == second.true_wind
-    assert published[0].apparent_wind == second.apparent_wind
-    assert published[0].position is None
+@pytest.fixture
+def now(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    now = [2_000_000_000.0]
+    monkeypatch.setattr(time, "time", lambda: now[0])
+    return now
+
+
+@pytest.mark.usefixtures("now")
+def test_live_timestamps_shift_by_one_offset() -> None:
+    published: list[aggregate.Second] = []
+    live = mqtt.LiveTimestamps(published.append)
+
+    live(_second(1_700_000_000))  # not synced yet
+    live.sync(1_700_000_000.0)
+    # finished in one batch, they must keep their own seconds
+    live(_second(1_700_000_000))
+    live(_second(1_700_000_001))
+    live(_second(1_700_000_002))
+    live(_second(1_699_999_999))  # recorded before the replay started, e.g. --jump
+
+    assert published == [
+        replace(_second(1_700_000_000), timestamp_s=2_000_000_000),
+        replace(_second(1_700_000_001), timestamp_s=2_000_000_001),
+        replace(_second(1_700_000_002), timestamp_s=2_000_000_002),
+    ]
+
+
+def test_live_timestamps_pause_leaves_a_gap(now: list[float]) -> None:
+    published: list[aggregate.Second] = []
+    live = mqtt.LiveTimestamps(published.append)
+    live.sync(1_700_000_000.0)
+
+    now[0] += 60  # paused, replay time stands still
+    live.sync(1_700_000_000.0)
+    live(_second(1_700_000_001))
+
+    assert [s.timestamp_s for s in published] == [2_000_000_061]
+
+
+@pytest.mark.usefixtures("now")
+def test_live_timestamps_never_go_back() -> None:
+    published: list[aggregate.Second] = []
+    live = mqtt.LiveTimestamps(published.append)
+    live.sync(1_700_000_000.0)
+    live(_second(1_700_000_005))
+
+    live.sync(1_700_000_010.0)  # replay ran ahead of the clock
+    live(_second(1_700_000_006))
+
+    assert [s.timestamp_s for s in published] == [2_000_000_005, 2_000_000_006]
