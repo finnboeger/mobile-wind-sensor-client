@@ -1,3 +1,4 @@
+import logging
 import math
 
 import pytest
@@ -71,3 +72,46 @@ def test_seconds_without_wind_are_skipped() -> None:
     finished = aggregator.add_position(position(5_000))
     finished += aggregator.add_wind(wind(5_000))
     assert [(s.timestamp_s, s.position) for s in finished] == [(4, None)]
+
+
+def test_positions_before_the_first_wind_are_dropped_in_one_info_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    aggregator = SecondAggregator()
+    with caplog.at_level(logging.INFO, logger="aggregate"):
+        # the GPS is ready before the wind at startup
+        for s in range(1, 31):
+            aggregator.add_position(position(s * 1_000))
+        aggregator.add_wind(wind(31_000))
+        aggregator.add_position(position(31_000))
+        aggregator.add_position(position(32_000))
+        finished = aggregator.add_wind(wind(32_000))
+    assert [s.timestamp_s for s in finished] == [31]
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (
+            logging.INFO,
+            "Wind started at 31, dropped 30 positions of 30 earlier seconds",
+        ),
+    ]
+
+
+def test_a_gap_in_the_wind_logs_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    aggregator = SecondAggregator()
+    aggregator.add_wind(wind(1_000))
+    aggregator.add_position(position(1_000))
+    aggregator.add_position(position(2_000))
+    aggregator.add_wind(wind(2_000))
+    with caplog.at_level(logging.INFO, logger="aggregate"):
+        for s in range(3, 13):
+            aggregator.add_position(position(s * 1_000))
+            aggregator.add_position(position(s * 1_000 + 500))
+        aggregator.add_wind(wind(13_000))
+        aggregator.add_position(position(13_000))
+        aggregator.add_position(position(14_000))
+        aggregator.add_wind(wind(14_000))
+    assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
+        (
+            logging.WARNING,
+            "No wind for 10 seconds between 3 and 12, dropped their 20 positions",
+        ),
+    ]
