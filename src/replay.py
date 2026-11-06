@@ -325,6 +325,7 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
     start_paused: bool,
     features: list[str],
     jump_to: float | None,
+    current_timestamps: bool,
 ) -> None:
     init_logging()
 
@@ -345,9 +346,12 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
 
     # main() already checked that a broker is configured
     mqtt_config = Config().MQTT if "mqtt" in features else None
+    live_timestamps: mqtt.LiveTimestamps | None = None
     if mqtt_config is not None:
         output_queues.append(mqtt_wind_queue)
         publish = mqtt.init(mqtt_config)
+        if current_timestamps:
+            publish = live_timestamps = mqtt.LiveTimestamps(publish)
         aggregate.init(mqtt_position_queue, mqtt_wind_queue, [publish])
 
     threading.Thread(
@@ -451,9 +455,10 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
             if ch == ord(" "):
                 paused = not paused
                 last_real = time.time()
-            if ch in (ord("+"), ord("=")):
+            # live timestamps only work in real time, see mqtt.LiveTimestamps
+            if ch in (ord("+"), ord("=")) and live_timestamps is None:
                 speed = min(MAX_SPEED, speed * 2.0)
-            if ch == ord("-"):
+            if ch == ord("-") and live_timestamps is None:
                 speed = max(MIN_SPEED, speed / 2.0)
             if ch in (ord("n"), ord("N")) and paused and idx < len(events):
                 process_event(events[idx])
@@ -464,13 +469,14 @@ def run_tui(  # noqa: C901, PLR0912, PLR0913, PLR0915
             now_real = time.time()
             replay_time += (now_real - last_real) * speed
             last_real = now_real
-
+        if live_timestamps is not None:
+            # also while paused, so the time spent paused becomes a gap
+            live_timestamps.sync(replay_time)
+        if not paused:
             while idx < len(events) and events[idx].log_time <= replay_time:
                 process_event(events[idx])
                 idx += 1
-            drain_calc_outputs(replay_time)
-        else:
-            drain_calc_outputs(replay_time)
+        drain_calc_outputs(replay_time)
 
         # Draw
         stdscr.erase()
@@ -656,6 +662,15 @@ def main() -> None:
             "(example: 2026-06-20T10:00:00Z)."
         ),
     )
+    parser.add_argument(
+        "--current-timestamps",
+        action="store_true",
+        help=(
+            "With --features mqtt, shift every record to the current time, e.g. "
+            "to test the uplink end to end. Only at --speed 1, +/- are disabled, "
+            "and nothing before --jump is published."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -678,6 +693,12 @@ def main() -> None:
     if "mqtt" in features and Config().MQTT is None:
         msg = "--features mqtt needs MQTT.BROKER and a valid MQTT.PORT in config.ini"
         raise SystemExit(msg)
+    if args.current_timestamps and "mqtt" not in features:
+        msg = "--current-timestamps only applies to --features mqtt"
+        raise SystemExit(msg)
+    if args.current_timestamps and args.speed != 1.0:
+        msg = "--current-timestamps only works at --speed 1"
+        raise SystemExit(msg)
 
     curses.wrapper(
         run_tui,
@@ -687,6 +708,7 @@ def main() -> None:
         start_paused=bool(args.paused),
         features=features,
         jump_to=jump_time if args.jump is not None else None,
+        current_timestamps=bool(args.current_timestamps),
     )
 
 
