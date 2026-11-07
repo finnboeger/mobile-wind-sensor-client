@@ -111,6 +111,10 @@ class MagnetometerConfig:
     DECLINATION_DEGREES: float
     #: bench calibration file of each magnetometer, "{sensor}" is replaced by its name
     BENCH_CALIBRATION_FILE: str
+    #: learn the boat's iron while underway
+    CONTINUOUS_CALIBRATION: bool
+    #: where the continuously learned calibration is kept
+    CALIBRATION_FILE: str
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -394,6 +398,20 @@ class Config:
                 "BENCH_CALIBRATION_FILE",
                 str,
                 "compass_bench_{sensor}.json",
+            ),
+            CONTINUOUS_CALIBRATION=get(
+                config,
+                "MAGNETOMETER",
+                "CONTINUOUS_CALIBRATION",
+                parse_bool,
+                True,
+            ),
+            CALIBRATION_FILE=get(
+                config,
+                "MAGNETOMETER",
+                "CALIBRATION_FILE",
+                str,
+                "compass_calibration.json",
             ),
         )
 

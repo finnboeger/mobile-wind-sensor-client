@@ -17,18 +17,26 @@ and not from the accelerometer alone.
 and in the tests.
 """
 
+import json
 import logging
 import math
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from queue import Empty, Queue
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import config
 import log
 import magnetometer
 from attitude import AttitudeEstimator
-from compass_calibration import BenchCalibration, bench_calibration_file
+from compass_calibration import (
+    BenchCalibration,
+    ContinuousCalibration,
+    HorizontalCalibration,
+    bench_calibration_file,
+    write_json_atomically,
+)
 from heading import HeadingFilter
 from motion import to_north_east
 from structs import HeadingData, ImuSample, MagnetometerSample, PositionData, Vector3
@@ -45,19 +53,30 @@ _SAMPLE_TIMEOUT = 5.0
 _MAX_POSITION_AGE_MS = 3000
 
 
-def heading_from_field(field: Vector3, roll: float, pitch: float) -> float:
+def heading_from_field(
+    field: Vector3,
+    roll: float,
+    pitch: float,
+    horizontal: HorizontalCalibration | None = None,
+) -> float:
     """
     Return the magnetic heading of the unit's forward direction.
 
     :param field: magnetic field in the unit's axes (forward, right, down)
     :param roll: roll in rad, positive with the right side down
     :param pitch: pitch in rad, positive with the front up
+    :param horizontal: correction of the boat's iron, if known
     :return: heading in rad in [0, 2π), clockwise from magnetic north
     """
+    if horizontal is not None:
+        field = horizontal.remove_offset(field)
     level = to_north_east(field, roll, pitch, 0.0)
-    # level.x is the field along the levelled forward direction, level.y to the
-    # right: facing east, north is to the left and level.y negative
-    return math.atan2(-level.y, level.x) % math.tau
+    x, y = level.x, level.y
+    if horizontal is not None:
+        x, y = horizontal.apply_soft_iron(x, y)
+    # x is the field along the levelled forward direction, y to the right: facing
+    # east, north is to the left and y negative
+    return math.atan2(-y, x) % math.tau
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -66,18 +85,47 @@ class CompassSettings:
     declination: float = 0.0
     #: standard deviation of a single magnetometer heading in rad
     magnetic_sigma: float = DEFAULT_MAGNETIC_SIGMA
+    #: learn the boat's iron while underway
+    continuous_calibration: bool = True
+    #: calibration samples are only taken while tilted less than this, in rad
+    max_calibration_tilt: float = math.radians(20)
+    #: and while turning slower than this, in rad/s
+    max_calibration_rate: float = math.radians(45)
+    #: time between calibration fits in milliseconds
+    refit_interval_ms: int = 30_000
 
 
 class MagnetometerChannel:
-    """Correction of one magnetometer's readings."""
+    """Calibration of one magnetometer."""
 
     def __init__(self, name: str, bench: BenchCalibration | None = None) -> None:
         self.name = name
         self.bench = bench or BenchCalibration()
+        self.calibration = ContinuousCalibration()
 
     def correct(self, field: Vector3) -> Vector3:
         """Return the field with the iron in the unit removed."""
         return self.bench.apply(field)
+
+    def heading(self, field: Vector3, roll: float, pitch: float) -> float:
+        """
+        Return the magnetic heading with the boat's iron removed.
+
+        :param field: field after :py:meth:`correct`
+        """
+        return heading_from_field(field, roll, pitch, self.calibration.calibration)
+
+    def add_calibration_sample(self, field: Vector3, roll: float, pitch: float) -> None:
+        """Add a field after :py:meth:`correct` to the continuous calibration."""
+        level = to_north_east(field, roll, pitch, 0.0)
+        self.calibration.add_sample(level.x, level.y)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {"name": self.name, "calibration": self.calibration.state_dict()}
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        if "calibration" in state:
+            self.calibration.load_state_dict(state["calibration"])
 
 
 def world_to_unit(
@@ -186,6 +234,11 @@ class CompassProcessor:
             compass_lag=0.0,
         )
         self.turn = TurnAcceleration()
+        #: set when a calibration changed, cleared once it has been saved
+        self.calibration_changed = False
+        #: rate of turn in rad/s of the latest IMU sample
+        self._rate = 0.0
+        self._last_fit_time: int | None = None
 
     def add_position(self, position: PositionData) -> None:
         """Add a GNSS fix."""
@@ -208,15 +261,47 @@ class CompassProcessor:
     def add_imu(self, sample: ImuSample) -> None:
         self.attitude.update(sample, self._boat_acceleration(sample))
         if self.attitude.initialized:
-            self.heading.predict(sample.timestamp, self.attitude.heading_rate(sample))
+            self._rate = self.attitude.heading_rate(sample)
+            self.heading.predict(sample.timestamp, self._rate)
+
+    @property
+    def calibrated(self) -> bool:
+        """Whether the continuous calibration has made a fit."""
+        return any(channel.calibration.converged for channel in self.channels)
+
+    def _calibration_sample_ok(self) -> bool:
+        settings = self.settings
+        return (
+            settings.continuous_calibration
+            and abs(self.attitude.roll) < settings.max_calibration_tilt
+            and abs(self.attitude.pitch) < settings.max_calibration_tilt
+            and abs(self._rate) < settings.max_calibration_rate
+        )
+
+    def _refit_if_due(self, timestamp: int) -> bool:
+        """Fit the continuous calibrations every refit interval."""
+        if self._last_fit_time is None:
+            self._last_fit_time = timestamp
+        if timestamp - self._last_fit_time < self.settings.refit_interval_ms:
+            return False
+        self._last_fit_time = timestamp
+        changed = False
+        if self.settings.continuous_calibration:
+            for channel in self.channels:
+                changed = channel.calibration.refit() or changed
+        return changed
 
     def magnetic_heading(self, sample: MagnetometerSample) -> float | None:
         """Return the magnetic heading measured by the sample, without the gyro."""
         if not sample.magnetic_fields:
             return None
+        roll, pitch = self.attitude.roll, self.attitude.pitch
         # only the first magnetometer for now
-        field = self.channels[0].correct(sample.magnetic_fields[0])
-        return heading_from_field(field, self.attitude.roll, self.attitude.pitch)
+        channel = self.channels[0]
+        field = channel.correct(sample.magnetic_fields[0])
+        if self._calibration_sample_ok():
+            channel.add_calibration_sample(field, roll, pitch)
+        return channel.heading(field, roll, pitch)
 
     def add_magnetometer(self, sample: MagnetometerSample) -> HeadingData | None:
         """
@@ -230,6 +315,7 @@ class CompassProcessor:
         magnetic_heading = self.magnetic_heading(sample)
         if magnetic_heading is not None:
             self.heading.update(sample.timestamp, magnetic_heading)
+        self.calibration_changed |= self._refit_if_due(sample.timestamp)
         heading = self.heading.heading_at(sample.timestamp)
         if heading is None:
             return None
@@ -266,6 +352,36 @@ class CompassProcessor:
                     headings.append(heading)
         return headings
 
+    def state_dict(self) -> dict[str, Any]:
+        """Return what has been learned, to be restored after a restart."""
+        return {
+            "version": 1,
+            "magnetometers": [channel.state_dict() for channel in self.channels],
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        if state.get("version") != 1:
+            logger.warning("Unknown compass calibration version, ignoring it")
+            return
+        stored = {entry.get("name"): entry for entry in state.get("magnetometers", [])}
+        for channel in self.channels:
+            if channel.name in stored:
+                channel.load_state_dict(stored[channel.name])
+
+    def save(self, path: str | Path) -> None:
+        write_json_atomically(path, self.state_dict())
+        self.calibration_changed = False
+
+    def load(self, path: str | Path) -> None:
+        """Restore a saved state, if there is one."""
+        try:
+            with Path(path).open(encoding="utf-8") as file:
+                self.load_state_dict(json.load(file))
+        except FileNotFoundError:
+            logger.info("No compass calibration at %s, starting a new one", path)
+        except (OSError, ValueError, KeyError, TypeError):
+            logger.exception("Couldn't read the compass calibration at %s", path)
+
 
 def _drain(queue: Queue[list[_T]] | Queue[_T]) -> list[_T]:
     """Return everything waiting in a queue of items or of lists of items."""
@@ -287,6 +403,7 @@ def worker(  # noqa: PLR0913
     magnetometer_queue: Queue[list[MagnetometerSample]],
     output_queues: list[Queue[HeadingData]],
     position_queue: Queue[PositionData] | None = None,
+    calibration_file: str | None = None,
     stop: threading.Event | None = None,
 ) -> None:
     """
@@ -294,6 +411,8 @@ def worker(  # noqa: PLR0913
 
     :param output_queues: queues receiving the headings, like the compass headings
         received over NMEA 2000
+    :param calibration_file: where the continuous calibration is saved when it
+        changes
     :param stop: ends the loop when set, used by the tests
     """
     while stop is None or not stop.is_set():
@@ -316,20 +435,28 @@ def worker(  # noqa: PLR0913
             log.data("heading", heading)
             for queue in output_queues:
                 queue.put(heading)
+        if processor.calibration_changed and calibration_file is not None:
+            try:
+                processor.save(calibration_file)
+            except OSError:
+                logger.exception("Couldn't save the compass calibration")
 
 
 def create_processor() -> CompassProcessor:
     magnetometer_config = config.Config().MAGNETOMETER
     pattern = magnetometer_config.BENCH_CALIBRATION_FILE
-    return CompassProcessor(
+    processor = CompassProcessor(
         {
             name: BenchCalibration.load(bench_calibration_file(pattern, name))
             for name in magnetometer.channel_names(magnetometer_config.DEVICES)
         },
         CompassSettings(
             declination=math.radians(magnetometer_config.DECLINATION_DEGREES),
+            continuous_calibration=magnetometer_config.CONTINUOUS_CALIBRATION,
         ),
     )
+    processor.load(magnetometer_config.CALIBRATION_FILE)
+    return processor
 
 
 def init(
@@ -347,6 +474,7 @@ def init(
             magnetometer_queue,
             output_queues,
             position_queue,
+            config.Config().MAGNETOMETER.CALIBRATION_FILE,
         ),
         daemon=True,
     ).start()
