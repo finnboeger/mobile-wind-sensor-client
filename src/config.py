@@ -121,6 +121,8 @@ class MagnetometerConfig:
     BOW_ANGLE_DEGREES: float
     #: follow the drift of further magnetometers relative to the first one
     DRIFT_TRACKING: bool
+    #: send the boat's heading on NMEA 2000, for displays and autopilots
+    SEND_HEADING: bool
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -437,6 +439,13 @@ class Config:
                 config,
                 "MAGNETOMETER",
                 "DRIFT_TRACKING",
+                parse_bool,
+                True,
+            ),
+            SEND_HEADING=get(
+                config,
+                "MAGNETOMETER",
+                "SEND_HEADING",
                 parse_bool,
                 True,
             ),

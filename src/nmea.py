@@ -159,6 +159,53 @@ def forward_position(
 wind_forwarding_buffer = []
 
 
+#: most headings per second sent on the network
+MAX_HEADING_RATE = 10
+
+
+def forward_heading(
+    n2k_node: n2k.Node,
+    queue: Queue[HeadingData],
+    *,
+    bow_angle: float,
+    true_heading: bool,
+) -> None:
+    """
+    Send the heading from the unit's magnetometers as Vessel Heading (PGN 127250).
+
+    :param n2k_node: NMEA2000 Node to send messages through.
+    :param queue: Input queue containing the unit's heading.
+    :param bow_angle: angle from the unit's forward direction to the bow in rad,
+        clockwise, so that the boat's heading is sent
+    :param true_heading: whether the heading is relative to true north (declination
+        or GNSS alignment applied) instead of magnetic north
+    """
+    reference = (
+        n2k.types.N2kHeadingReference.true
+        if true_heading
+        else n2k.types.N2kHeadingReference.magnetic
+    )
+    last_sent: int | None = None
+    while True:
+        heading = queue.get()
+        if (
+            last_sent is not None
+            and 0 <= heading.timestamp - last_sent < 1000 / MAX_HEADING_RATE
+        ):
+            continue
+        last_sent = heading.timestamp
+        n2k_node.send_msg(
+            n2k.messages.create_n2k_heading_message(
+                n2k.messages.Heading(
+                    heading=(heading.heading + bow_angle) % math.tau,
+                    deviation=None,
+                    variation=None,
+                    ref=reference,
+                ),
+            ),
+        )
+
+
 def forward_wind(
     n2k_node: n2k.Node,
     queue: WindOutputQueue,
