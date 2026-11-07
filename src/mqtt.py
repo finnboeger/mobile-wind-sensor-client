@@ -22,13 +22,31 @@ logger = logging.getLogger(__name__)
 KEEPALIVE_S: Final = 30
 RECONNECT_MIN_DELAY_S: Final = 1
 RECONNECT_MAX_DELAY_S: Final = 30
+# QoS 1 messages wait in memory until the broker confirms them, including while
+# offline. Cap the queue at 6 hours of data; newer seconds are dropped beyond that.
+QOS: Final = 1
+MAX_QUEUED_MESSAGES: Final = 6 * 60 * 60
 
 # Read by the local dashboard. "state" is None until the first attempt finishes,
-# then "success" while connected and "fail" while not.
-connection_status = {
+# then "success" while connected and "fail" while not. The counters cover the
+# time since start: "queued" messages were handed to the client, "confirmed" ones
+# acknowledged by the broker and "dropped" ones never queued (e.g. queue full).
+# "last_confirmed" is the Unix time of the latest acknowledgement.
+connection_status: dict[str, Any] = {
     "state": None,
     "error_count": 0,
+    "queued": 0,
+    "confirmed": 0,
+    "dropped": 0,
+    "last_confirmed": None,
 }
+
+
+def status() -> dict[str, Any]:
+    """Return the connection status plus the number of unconfirmed messages."""
+    current = dict(connection_status)
+    current["pending"] = max(0, current["queued"] - current["confirmed"])
+    return current
 
 
 def connect_callback(
@@ -72,6 +90,12 @@ def disconnect_callback(
     logger.warning("Disconnected from MQTT broker (%s), reconnecting", reason)
 
 
+def publish_callback(_client: mqtt.Client, _userdata: Any, _mid: int) -> None:  # noqa: ANN401
+    # With QoS 1 this runs when the broker's PUBACK arrives.
+    connection_status["confirmed"] += 1
+    connection_status["last_confirmed"] = time.time()
+
+
 def _degrees(value: float) -> int:
     """Round a direction to whole degrees from 0 to 359."""
     # rounding after the modulo would turn e.g. 359.6 into 360
@@ -109,14 +133,25 @@ def publish_message(
         },
     }
 
-    message_info = client.publish(topic, json.dumps(payload), qos=0)
+    message_info = client.publish(topic, json.dumps(payload), qos=QOS)
     if message_info.rc == mqtt.MQTT_ERR_NO_CONN:
-        # Expected while offline, the disconnect itself is logged once.
+        # QoS 1 messages stay queued and are sent once the connection is back.
+        connection_status["queued"] += 1
         logger.debug(
-            "Dropped MQTT message for timestamp %d, not connected",
+            "Queued MQTT message for timestamp %d until reconnected",
             second.timestamp_s,
         )
+    elif message_info.rc == mqtt.MQTT_ERR_QUEUE_SIZE:
+        # Offline longer than the queue holds. Log once per queue length, not
+        # every second.
+        connection_status["dropped"] += 1
+        if connection_status["dropped"] % MAX_QUEUED_MESSAGES == 1:
+            logger.warning(
+                "MQTT queue is full with %d messages, dropping new ones",
+                MAX_QUEUED_MESSAGES,
+            )
     elif message_info.rc != mqtt.MQTT_ERR_SUCCESS:
+        connection_status["dropped"] += 1
         logger.error(
             "Failed to publish MQTT message for timestamp %d "
             "to topic %s with error code %d",
@@ -125,6 +160,7 @@ def publish_message(
             message_info.rc,
         )
     else:
+        connection_status["queued"] += 1
         logger.debug(
             "Published MQTT message for timestamp %d to topic %s",
             second.timestamp_s,
@@ -150,6 +186,8 @@ def init(config: MQTTConfig) -> Callable[[aggregate.Second], None]:
     client.on_connect = connect_callback  # pyright: ignore[reportAttributeAccessIssue]
     client.on_connect_fail = connect_fail_callback
     client.on_disconnect = disconnect_callback  # pyright: ignore[reportAttributeAccessIssue]
+    client.on_publish = publish_callback  # pyright: ignore[reportAttributeAccessIssue]
+    client.max_queued_messages_set(MAX_QUEUED_MESSAGES)
     client.reconnect_delay_set(
         min_delay=RECONNECT_MIN_DELAY_S,
         max_delay=RECONNECT_MAX_DELAY_S,

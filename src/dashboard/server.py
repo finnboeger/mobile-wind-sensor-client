@@ -170,7 +170,7 @@ def mqtt_status() -> dict[str, Any]:
         "enabled": True,
         "broker": config.MQTT.BROKER,
         "topic": config.MQTT.TOPIC,
-        **mqtt.connection_status,
+        **mqtt.status(),
     }
 
 

@@ -19,6 +19,11 @@ CONNACK = bytes([0x20, 0x03, 0x00, 0x00, 0x00])
 PUBLISH = 3
 
 
+def _puback(packet_id: bytes) -> bytes:
+    # MQTT v5 PUBACK with reason "Success", which may be left out
+    return bytes([0x40, 0x02]) + packet_id
+
+
 def _unused_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -48,13 +53,14 @@ def _read_packet(conn: socket.socket) -> tuple[int, bytes]:
     return packet_type, _read_exactly(conn, length)
 
 
-def _parse_publish(body: bytes) -> tuple[str, dict]:
-    """Topic and JSON payload of a QoS 0 MQTT v5 PUBLISH."""
+def _parse_publish(body: bytes) -> tuple[str, bytes, dict]:
+    """Topic, packet identifier and JSON payload of a QoS 1 MQTT v5 PUBLISH."""
     topic_length = int.from_bytes(body[:2])
     topic = body[2 : 2 + topic_length].decode()
-    rest = body[2 + topic_length :]
+    packet_id = body[2 + topic_length : 4 + topic_length]
+    rest = body[4 + topic_length :]
     properties_length = rest[0]  # a single byte for the empty property list paho sends
-    return topic, json.loads(rest[1 + properties_length :])
+    return topic, packet_id, json.loads(rest[1 + properties_length :])
 
 
 def _wind(timestamp: int) -> tuple[CorrectedApparentWindData, TrueWindData]:
@@ -95,7 +101,18 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
             TOPIC="test/topic",
         ),
     )
-    monkeypatch.setattr(mqtt, "connection_status", {"state": None, "error_count": 0})
+    monkeypatch.setattr(
+        mqtt,
+        "connection_status",
+        {
+            "state": None,
+            "error_count": 0,
+            "queued": 0,
+            "confirmed": 0,
+            "dropped": 0,
+            "last_confirmed": None,
+        },
+    )
 
     position_queue: Queue[PositionData] = Queue()
     wind_queue: Queue[tuple[CorrectedApparentWindData, TrueWindData]] = Queue()
@@ -135,10 +152,59 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
             assert mqtt.connection_status["state"] == "success"
             assert mqtt.connection_status["error_count"] >= 1
 
-    topic, payload = _parse_publish(body)
+            topic, packet_id, payload = _parse_publish(body)
+            assert mqtt.status()["pending"] == 1
+            conn.sendall(_puback(packet_id))
+            deadline = time.monotonic() + TIMEOUT_S
+            while mqtt.status()["pending"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            status = mqtt.status()
+            assert status["confirmed"] == 1
+            assert status["pending"] == 0
+            assert status["last_confirmed"] is not None
+
     assert topic == "test/topic"
     assert payload["timestamp"] == 1
     assert payload["true"]["speed"] == 4.0
+
+
+def test_publish_counts_queued_and_dropped_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        mqtt,
+        "connection_status",
+        {"queued": 0, "confirmed": 0, "dropped": 0, "last_confirmed": None},
+    )
+    results = [
+        mqtt.mqtt.MQTT_ERR_SUCCESS,
+        mqtt.mqtt.MQTT_ERR_NO_CONN,  # kept in the QoS 1 queue until reconnected
+        mqtt.mqtt.MQTT_ERR_QUEUE_SIZE,
+    ]
+    qos_used: list[int] = []
+
+    class Client:
+        def publish(self, _topic: str, _payload: str, qos: int) -> SimpleNamespace:
+            qos_used.append(qos)
+            return SimpleNamespace(rc=results.pop(0))
+
+    position = aggregate.ShortPositionData(
+        latitude=54.0,
+        longitude=10.0,
+        speed=3.0,
+        true_course=90.0,
+    )
+    for timestamp_s in range(3):
+        second = replace(_second(timestamp_s), position=position)
+        mqtt.publish_message(Client(), "test/topic", second)  # type: ignore[arg-type]
+    mqtt.publish_callback(None, None, 1)  # type: ignore[arg-type]
+
+    assert qos_used == [1, 1, 1]
+    status = mqtt.status()
+    assert status["queued"] == 2
+    assert status["dropped"] == 1
+    assert status["confirmed"] == 1
+    assert status["pending"] == 1
 
 
 def test_publish_message_keeps_directions_below_360() -> None:

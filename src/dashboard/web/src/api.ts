@@ -50,6 +50,16 @@ export interface StatusResponse {
     topic?: string;
     state?: string | null;
     error_count?: number;
+    /** messages handed to the MQTT client since start */
+    queued?: number;
+    /** messages the broker acknowledged (QoS 1) */
+    confirmed?: number;
+    /** messages not queued, e.g. because the queue was full */
+    dropped?: number;
+    /** queued but not yet acknowledged */
+    pending?: number;
+    /** s since epoch of the latest acknowledgement */
+    last_confirmed?: number | null;
   };
   system: {
     uptime: number | null;
