@@ -463,3 +463,68 @@ def test_field_strength_check() -> None:
     assert not channel.field_ok(30_000, (70.0, 0.0, 0.0))
     assert not channel.field_ok(61_000, (70.0, 0.0, 0.0))
     assert channel.field_ok(61_100, (70.0, 0.0, 0.0))
+
+
+def test_fit_rotation_recovers_a_rotation() -> None:
+    rotation = world_to_unit(math.radians(3), math.radians(-2), math.radians(1.5))
+    rng = random.Random(2)
+    source = [
+        rotate(world_to_unit(*orientation), EARTH_FIELD)
+        for orientation in _random_orientations(200, 4)
+    ]
+    target = [
+        tuple(x + rng.gauss(0, 0.05) for x in rotate(rotation, vector))
+        for vector in source
+    ]
+    found = compass_calibration.fit_rotation(source, target)  # type: ignore[arg-type]
+    assert found is not None
+    for i in range(3):
+        for j in range(3):
+            assert abs(found[i][j] - rotation[i][j]) < 1e-3
+    angle = compass_calibration.rotation_angle(found)
+    assert 3 < math.degrees(angle) < 4.5
+
+
+def _rotated_chip(degrees: tuple[float, float, float], **kwargs: Any) -> Magnetometer:  # noqa: ANN401
+    return Magnetometer(
+        rotation=world_to_unit(*(math.radians(d) for d in degrees)),
+        noise=0.05,
+        **kwargs,
+    )
+
+
+def _angle_between(a: Vector3, b: Vector3) -> float:
+    """Return the angle between two vectors in degrees."""
+    cosine = sum(x * y for x, y in zip(a, b, strict=True)) / (
+        math.dist(a, (0, 0, 0)) * math.dist(b, (0, 0, 0))
+    )
+    return math.degrees(math.acos(min(1.0, cosine)))
+
+
+def test_bench_calibration_aligns_the_second_magnetometer() -> None:
+    first = _rotated_chip((1, 0.5, -1), hard_iron=(5.0, 3.0, -8.0))
+    second = _rotated_chip((-3, 2, 1), hard_iron=HARD_IRON, soft_iron=SOFT_IRON)
+    rng = random.Random(3)
+    samples: list[list[Vector3]] = [[], []]
+    for orientation in _random_orientations(400, 8):
+        field = rotate(world_to_unit(*orientation), EARTH_FIELD)
+        samples[0].append(first.measure(field, 0, rng))
+        samples[1].append(second.measure(field, 0, rng))
+
+    aligned = calibrate_compass.calibrate_all(["first", "second"], samples)
+    unaligned = [compass_calibration.fit_ellipsoid(s) for s in samples]
+    assert aligned[0] is not None
+    assert aligned[1] is not None
+    assert unaligned[1] is not None
+
+    reference = aligned[0]
+
+    def largest_angle(calibration: compass_calibration.BenchCalibration) -> float:
+        return max(
+            _angle_between(calibration.apply(b), reference.apply(a))
+            for a, b in zip(samples[0], samples[1], strict=True)
+        )
+
+    # the chips sit about 4° apart, after the alignment their fields agree
+    assert largest_angle(unaligned[1].calibration) > 3
+    assert largest_angle(aligned[1]) < 0.5
