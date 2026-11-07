@@ -298,8 +298,9 @@ def _run_rib(
     magnetometers: list[Magnetometer],
     course: RibCourse = RIB,
     earth_field: Vector3 = EARTH_FIELD,
+    after: float | None = None,
 ) -> list[float]:
-    """Return the heading errors in degrees in the last two minutes."""
+    """Return the heading errors in degrees, by default in the last two minutes."""
     imu_samples, magnetometer_samples = simulate(
         course.attitude,
         course.duration,
@@ -313,7 +314,7 @@ def _run_rib(
         imu_samples,
         magnetometer_samples,
         course.heading,
-        after=course.duration - 120,
+        after=course.duration - 120 if after is None else after,
         positions=course.positions(),
     )
 
@@ -528,3 +529,47 @@ def test_bench_calibration_aligns_the_second_magnetometer() -> None:
     # the chips sit about 4° apart, after the alignment their fields agree
     assert largest_angle(unaligned[1].calibration) > 3
     assert largest_angle(aligned[1]) < 0.5
+
+
+#: the RIB's turns, then a long straight run on which the MEMS sensor drifts
+LONG_RUN = RibCourse(
+    targets=RIB.targets,
+    current=RIB.current,
+    final_straight_time=900,
+)
+DRIFT_START = LONG_RUN.duration - 900
+
+
+def _drifting_offset(time: float) -> Vector3:
+    """The MEMS sensor's offset drifts by 4 µT sideways and 3 µT down."""
+    progress = min(1.0, max(0.0, (time - DRIFT_START) / 600))
+    return (0.0, 4.0 * progress, 3.0 * progress)
+
+
+def _drift_errors(settings: compass.CompassSettings) -> list[float]:
+    rm3100 = _boat_iron((0.0, 0.0, 0.0))
+    mems = _boat_iron((0.0, 0.0, 0.0), disturbance=_drifting_offset)
+    processor = compass.CompassProcessor({"rm3100": None, "mems": None}, settings)
+    return _run_rib(processor, [rm3100, mems], course=LONG_RUN, after=DRIFT_START)
+
+
+def test_drift_of_the_mems_sensor_is_followed() -> None:
+    tracked = _drift_errors(compass.CompassSettings())
+    untracked = _drift_errors(compass.CompassSettings(drift_tracking=False))
+    # without tracking the average of both drifts away by half the MEMS sensor's
+    # error, until they disagree by more than 8° and only the RM3100 is used
+    assert max(abs(e) for e in untracked) > 2.5
+    assert max(abs(e) for e in tracked) < 1
+
+
+def test_drift_tracker_ignores_a_short_disturbance() -> None:
+    tracker = compass_calibration.DriftTracker()
+    for second in range(600):
+        tracker.add(second * 1000, (1.0, 0.0, 0.0))
+    for second in range(600, 630):
+        tracker.add(second * 1000, (1.0, 8.0, 0.0))
+    assert math.dist(tracker.offset, (1.0, 0.0, 0.0)) < 0.01
+    # a lasting change is accepted after ten minutes
+    for second in range(630, 1300):
+        tracker.add(second * 1000, (1.0, 8.0, 0.0))
+    assert math.dist(tracker.offset, (1.0, 8.0, 0.0)) < 0.5
