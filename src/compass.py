@@ -39,9 +39,10 @@ from compass_calibration import (
     bench_calibration_file,
     write_json_atomically,
 )
-from heading import HeadingFilter
+from heading import HeadingFilter, wrap_angle
 from motion import to_north_east
 from structs import HeadingData, ImuSample, MagnetometerSample, PositionData, Vector3
+from utils.linalg import norm
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,19 @@ _HEADING_HISTORY_MS = 5000
 _MAX_HEADING_TIME_OFFSET_MS = 250
 #: the boat must have gone straight for this long before a fix is used, in ms
 _STRAIGHT_FOR_MS = 3000
+#: magnetometer samples whose magnitude differs from the expected field strength by
+#: more than this fraction are ignored, e.g. while a current flows nearby
+_FIELD_TOLERANCE = 0.15
+#: time constant in seconds of the expected field strength
+_FIELD_TIME_CONSTANT = 600.0
+#: if the field strength stays off for this long, it is accepted as the new normal,
+#: in milliseconds
+_FIELD_RESET_AFTER_MS = 60_000
+#: two magnetometers further apart than this disagree, only the one closer to the
+#: gyro's prediction is used
+_MAX_SENSOR_DISAGREEMENT = math.radians(8)
+#: warn when the magnetometers have disagreed for this long, in milliseconds
+_DISAGREEMENT_WARNING_MS = 60_000
 
 
 def heading_from_field(
@@ -118,10 +132,49 @@ class MagnetometerChannel:
         self.name = name
         self.bench = bench or BenchCalibration()
         self.calibration = ContinuousCalibration()
+        #: expected strength of the earth's field after the bench calibration in µT
+        self.field_strength: float | None = self.bench.field_strength
+        self._field_rejected_since: int | None = None
+        self._time: int | None = None
 
     def correct(self, field: Vector3) -> Vector3:
         """Return the field with the iron in the unit removed."""
         return self.bench.apply(field)
+
+    def field_ok(self, timestamp: int, field: Vector3) -> bool:
+        """
+        Check the field strength of a corrected field.
+
+        A field that is much stronger or weaker than usual comes from something
+        nearby, e.g. a current in a cable or a magnet, and its direction is wrong.
+        """
+        magnitude = norm(field)
+        dt = 0.0 if self._time is None else max(0, timestamp - self._time) / 1000
+        self._time = timestamp
+        if self.field_strength is None:
+            self.field_strength = magnitude
+            return True
+        if (
+            abs(magnitude - self.field_strength)
+            > _FIELD_TOLERANCE * self.field_strength
+        ):
+            if self._field_rejected_since is None:
+                self._field_rejected_since = timestamp
+            elif timestamp - self._field_rejected_since > _FIELD_RESET_AFTER_MS:
+                logger.warning(
+                    "Magnetic field strength at %s changed from %.1f µT to %.1f µT",
+                    self.name,
+                    self.field_strength,
+                    magnitude,
+                )
+                self.field_strength = magnitude
+                self._field_rejected_since = None
+            return False
+        self._field_rejected_since = None
+        self.field_strength += min(1.0, dt / _FIELD_TIME_CONSTANT) * (
+            magnitude - self.field_strength
+        )
+        return True
 
     def heading(self, field: Vector3, roll: float, pitch: float) -> float:
         """
@@ -137,9 +190,15 @@ class MagnetometerChannel:
         self.calibration.add_sample(level.x, level.y)
 
     def state_dict(self) -> dict[str, Any]:
-        return {"name": self.name, "calibration": self.calibration.state_dict()}
+        return {
+            "name": self.name,
+            "field_strength": self.field_strength,
+            "calibration": self.calibration.state_dict(),
+        }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
+        if state.get("field_strength") is not None:
+            self.field_strength = float(state["field_strength"])
         if "calibration" in state:
             self.calibration.load_state_dict(state["calibration"])
 
@@ -255,6 +314,7 @@ class CompassProcessor:
         self._headings: deque[tuple[int, float]] = deque()
         self._last_turn_time: int | None = None
         self._new_alignment_samples = False
+        self._disagreeing_since: int | None = None
         #: set when a calibration changed, cleared once it has been saved
         self.calibration_changed = False
         #: rate of turn in rad/s of the latest IMU sample
@@ -360,15 +420,60 @@ class CompassProcessor:
 
     def magnetic_heading(self, sample: MagnetometerSample) -> float | None:
         """Return the magnetic heading measured by the sample, without the gyro."""
-        if not sample.magnetic_fields:
-            return None
         roll, pitch = self.attitude.roll, self.attitude.pitch
-        # only the first magnetometer for now
-        channel = self.channels[0]
-        field = channel.correct(sample.magnetic_fields[0])
-        if self._calibration_sample_ok():
-            channel.add_calibration_sample(field, roll, pitch)
-        return channel.heading(field, roll, pitch)
+        calibration_sample_ok = self._calibration_sample_ok()
+        headings: list[tuple[MagnetometerChannel, float]] = []
+        for channel, raw in zip(self.channels, sample.magnetic_fields, strict=False):
+            field = channel.correct(raw)
+            if not channel.field_ok(sample.timestamp, field):
+                continue
+            if calibration_sample_ok:
+                channel.add_calibration_sample(field, roll, pitch)
+            headings.append((channel, channel.heading(field, roll, pitch)))
+        return self._combine(sample.timestamp, headings)
+
+    def _combine(
+        self,
+        timestamp: int,
+        headings: list[tuple[MagnetometerChannel, float]],
+    ) -> float | None:
+        """
+        Combine the headings of the magnetometers that passed the field check.
+
+        Uncalibrated magnetometers are ignored once another one is calibrated. If two
+        disagree, the one closer to the gyro's prediction is used, which catches a
+        disturbance close to one of them, e.g. a current on the board.
+        """
+        if any(channel.calibration.converged for channel, _ in headings):
+            headings = [h for h in headings if h[0].calibration.converged]
+        if not headings:
+            return None
+        values = [heading for _, heading in headings]
+        spread = max(abs(wrap_angle(value - values[0])) for value in values)
+        predicted = self.heading.heading_at(timestamp)
+        if spread <= _MAX_SENSOR_DISAGREEMENT or predicted is None:
+            self._disagreeing_since = None
+            return (
+                math.atan2(
+                    sum(math.sin(v) for v in values),
+                    sum(math.cos(v) for v in values),
+                )
+                % math.tau
+            )
+
+        if self._disagreeing_since is None:
+            self._disagreeing_since = timestamp
+        elif timestamp - self._disagreeing_since > _DISAGREEMENT_WARNING_MS:
+            logger.warning(
+                "Magnetometers have disagreed by up to %.1f° for a minute: %s",
+                math.degrees(spread),
+                ", ".join(
+                    f"{channel.name} {math.degrees(heading):.1f}°"
+                    for channel, heading in headings
+                ),
+            )
+            self._disagreeing_since = timestamp
+        return min(values, key=lambda value: abs(wrap_angle(value - predicted)))
 
     def add_magnetometer(self, sample: MagnetometerSample) -> HeadingData | None:
         """
