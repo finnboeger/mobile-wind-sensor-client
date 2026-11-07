@@ -76,7 +76,6 @@ if __name__ == "__main__":
 
         mqtt.init(mqtt_position_queue, mqtt_wind_queue)
 
-    gps.init(position_output_queues)
     # The IMU samples feed the gyro aided heading of the wind worker
     wind_imu_queue: Queue[list[ImuSample]] = Queue()
     imu_output_queues = [wind_imu_queue]
@@ -94,9 +93,18 @@ if __name__ == "__main__":
         imu_output_queues.append(compass_imu_queue)
         use_magnetometers = magnetometer.init([magnetometer_queue])
     imu.init(imu_output_queues)
+    compass_position_queue: PositionQueue = Queue()
+    if use_magnetometers:
+        position_output_queues.append(compass_position_queue)
+    gps.init(position_output_queues)
     n2k_node, heading_queue, wind_queue = nmea.init(read_heading=not use_magnetometers)
     if use_magnetometers:
-        compass.init(compass_imu_queue, magnetometer_queue, [heading_queue])
+        compass.init(
+            compass_imu_queue,
+            magnetometer_queue,
+            [heading_queue],
+            compass_position_queue,
+        )
 
     # Forward the GPS data to the NMEA2000 network
     threading.Thread(
