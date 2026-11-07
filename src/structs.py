@@ -82,6 +82,16 @@ class ImuSample:
 
 
 @dataclass(frozen=True, kw_only=True)
+class MagnetometerSample:
+    """One reading of every magnetometer, in the measurement unit's axes."""
+
+    #: time of the reading in milliseconds since epoch
+    timestamp: int
+    #: magnetic field in µT of each configured magnetometer, in the config's order
+    magnetic_fields: tuple[Vector3, ...]
+
+
+@dataclass(frozen=True, kw_only=True)
 class VelocityData:
     """Filtered velocity over ground at the time of a wind measurement."""
 

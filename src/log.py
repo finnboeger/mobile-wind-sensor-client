@@ -20,6 +20,7 @@ DataConsumer = Literal[
     "heading",
     "unit_heading",
     "imu",
+    "magnetometer",
     "wind",
     "true_wind",
 ]

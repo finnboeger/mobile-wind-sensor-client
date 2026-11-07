@@ -94,6 +94,22 @@ class ImuConfig:
 
 
 @dataclass(frozen=True, kw_only=True)
+class MagnetometerConfig:
+    #: read the magnetometers
+    ENABLED: bool
+    #: names of the magnetometers, keys of magnetometer.DEVICES
+    DEVICES: list[str]
+    #: number of the I2C bus, e.g. 1 for /dev/i2c-1
+    I2C_BUS: int
+    #: I2C address of each magnetometer, None for the chip's default
+    ADDRESSES: list[int | None]
+    #: sensor axes pointing forward, right and down in the unit, for each magnetometer
+    AXES: list[str]
+    #: sample rate in Hz
+    SAMPLE_RATE_HZ: float
+
+
+@dataclass(frozen=True, kw_only=True)
 class FilterConfig:
     #: use the Kalman filter for the boat velocity instead of averaging GPS samples
     ENABLED: bool
@@ -112,6 +128,26 @@ def parse_position(value: str) -> tuple[float, float, float]:
     return (entries[0], entries[1], entries[2])
 
 
+def parse_list(value: str, separator: str = ",") -> list[str]:
+    """Parse a list like ``"rm3100, mmc5983ma"``, dropping empty entries."""
+    return [entry.strip() for entry in value.split(separator) if entry.strip()]
+
+
+def per_device(values: list[str], count: int, name: str) -> list[str]:
+    """
+    Return one setting for each of ``count`` devices.
+
+    :param values: either a single value used for all devices, or one per device
+    :param name: name of the setting, for the error message
+    """
+    if len(values) == 1:
+        return values * count
+    if len(values) != count:
+        msg = f"{name} needs one entry, or one for each of the {count} devices"
+        raise ValueError(msg)
+    return values
+
+
 def parse_bool(value: str) -> bool:
     return configparser.ConfigParser.BOOLEAN_STATES.get(value.lower(), False)
 
@@ -128,6 +164,7 @@ class Config:
     GPS: GPSConfig
     FILTER: FilterConfig
     IMU: ImuConfig
+    MAGNETOMETER: MagnetometerConfig
 
     def __new__(cls) -> "Config":
         if cls._instance is None:
@@ -317,6 +354,29 @@ class Config:
                 parse_position,
                 (0.0, 0.0, 0.0),
             ),
+        )
+
+        devices = [
+            device.lower()
+            for device in parse_list(
+                get(config, "MAGNETOMETER", "DEVICES", str, "rm3100"),
+            )
+        ]
+        addresses = parse_list(get(config, "MAGNETOMETER", "ADDRESSES", str, "auto"))
+        self.MAGNETOMETER = MagnetometerConfig(
+            ENABLED=get(config, "MAGNETOMETER", "ENABLED", parse_bool, False),
+            DEVICES=devices,
+            I2C_BUS=get(config, "MAGNETOMETER", "I2C_BUS", int, 1),
+            ADDRESSES=[
+                None if address.lower() == "auto" else int(address, 0)
+                for address in per_device(addresses, len(devices), "ADDRESSES")
+            ],
+            AXES=per_device(
+                parse_list(get(config, "MAGNETOMETER", "AXES", str, "x,-y,-z"), ";"),
+                len(devices),
+                "AXES",
+            ),
+            SAMPLE_RATE_HZ=get(config, "MAGNETOMETER", "SAMPLE_RATE_HZ", float, 20.0),
         )
 
     def __repr__(self) -> str:
