@@ -115,6 +115,10 @@ class MagnetometerConfig:
     CONTINUOUS_CALIBRATION: bool
     #: where the continuously learned calibration is kept
     CALIBRATION_FILE: str
+    #: learn the heading offset from the course over ground
+    GNSS_ALIGNMENT: bool
+    #: angle from the unit's forward direction to the bow in degrees, clockwise
+    BOW_ANGLE_DEGREES: float
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -412,6 +416,20 @@ class Config:
                 "CALIBRATION_FILE",
                 str,
                 "compass_calibration.json",
+            ),
+            GNSS_ALIGNMENT=get(
+                config,
+                "MAGNETOMETER",
+                "GNSS_ALIGNMENT",
+                parse_bool,
+                True,
+            ),
+            BOW_ANGLE_DEGREES=get(
+                config,
+                "MAGNETOMETER",
+                "BOW_ANGLE_DEGREES",
+                float,
+                0.0,
             ),
         )
 
