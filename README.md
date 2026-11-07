@@ -56,6 +56,46 @@ the mast or the boat needs no recalibration.
   positions relative to the IMU in metres (forward, right, down, so above is negative).
   Their sway is then removed from the GPS velocity and added to the wind sensor's.
 
+## Magnetometer compass
+
+Instead of a compass on NMEA 2000, the heading can come from magnetometers on the
+measurement unit itself: an RM3100 and an MMC5983MA, or either one. Enable it with
+`MAGNETOMETER.ENABLED = true`; it needs the IMU for roll and pitch. The heading is that
+of the unit's forward direction, like the wind angle, so set
+`SENSOR.COMPASS_OFFSET_DEGREES = 0`.
+
+- Tilt compensation (`src/compass.py`): the field is levelled with the IMU's roll and
+  pitch. The field near Hamburg points about 69° down, so a tilt error shows up 2.6
+  times larger in the heading. The GNSS speed times the rate of turn removes the
+  centripetal acceleration in turns, which the accelerometer would take for a roll.
+  The gyro carries the heading between readings.
+- Bench calibration (`src/calibrate_compass.py`), once per finished unit before mounting
+  it: run `python calibrate_compass.py --live 90` from `src` and turn the closed unit
+  slowly in every direction. This removes the iron that travels with the sensors and
+  turns the second magnetometer into the axes of the first.
+- Continuous calibration: the boat's own iron (engine, battery, fittings) is learned
+  from the turns the boat makes anyway, nothing has to be turned by hand. About a third
+  of a circle is enough for the hard iron, almost a full circle for the soft iron; one
+  slow circle after installing speeds up the first fit. The result is kept in
+  `MAGNETOMETER.CALIBRATION_FILE`.
+- GNSS alignment: on straight runs above 3 m/s the difference to the course over ground
+  is averaged per heading sector, so currents cancel. It corrects the declination
+  setting and what's left of the boat's iron. If the unit's forward doesn't point to the
+  bow, set `MAGNETOMETER.BOW_ANGLE_DEGREES`.
+- Two magnetometers: each is calibrated on its own and their headings are averaged. If
+  they differ by more than 8°, e.g. because a current flows near one of them, only the
+  one that agrees with the gyro is used and a lasting disagreement is logged. The
+  slowly changing difference between their fields is the MEMS sensor's offset drift,
+  which is removed (list the RM3100 first in `MAGNETOMETER.DEVICES`).
+- Output: the heading replaces the NMEA 2000 compass for the true wind and is sent as
+  Vessel Heading (PGN 127250) for the bow, unless `MAGNETOMETER.SEND_HEADING = false`.
+
+Set `MAGNETOMETER.AXES` like `IMU.AXES`, one mapping per magnetometer separated by `;`,
+and check that the `heading` data log increases when turning to starboard. The raw
+readings are recorded in the `magnetometer` data log, so the bench calibration can also
+be run on a recording. Currents near the sensors (LTE modem, wiring for lights) can't be
+calibrated out, so keep them away or use twisted pairs.
+
 ## Bill of Materials
 TODO
 
@@ -71,6 +111,8 @@ TODO
   - Supports SPI (via Jumper), UART and I2C
 - [Adafruit ISM330DHCX 6 DoF IMU](https://www.adafruit.com/product/4502)
   - Uses I2C (GPIO 2, 3) at address 0x6A
+- PNI RM3100 and MEMSIC MMC5983MA magnetometers
+  - Use I2C (GPIO 2, 3) at addresses 0x20 and 0x30
 
 
 ## Set up instructions

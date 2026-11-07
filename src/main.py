@@ -1,5 +1,6 @@
 import logging
 import logging.handlers
+import math
 import threading
 from queue import Queue
 
@@ -12,7 +13,13 @@ import nmea
 import wind
 from config import Config
 from log import DATA_SEPARATOR
-from structs import ImuSample, MagnetometerSample, PositionQueue, WindOutputQueue
+from structs import (
+    HeadingData,
+    ImuSample,
+    MagnetometerSample,
+    PositionQueue,
+    WindOutputQueue,
+)
 
 
 def init_logging() -> None:
@@ -99,10 +106,25 @@ if __name__ == "__main__":
     gps.init(position_output_queues)
     n2k_node, heading_queue, wind_queue = nmea.init(read_heading=not use_magnetometers)
     if use_magnetometers:
+        compass_output_queues = [heading_queue]
+        magnetometer_config = Config().MAGNETOMETER
+        if magnetometer_config.SEND_HEADING:
+            nmea_heading_queue: Queue[HeadingData] = Queue()
+            compass_output_queues.append(nmea_heading_queue)
+            threading.Thread(
+                target=nmea.forward_heading,
+                args=(n2k_node, nmea_heading_queue),
+                kwargs={
+                    "bow_angle": math.radians(magnetometer_config.BOW_ANGLE_DEGREES),
+                    "true_heading": magnetometer_config.GNSS_ALIGNMENT
+                    or magnetometer_config.DECLINATION_DEGREES != 0,
+                },
+                daemon=True,
+            ).start()
         compass.init(
             compass_imu_queue,
             magnetometer_queue,
-            [heading_queue],
+            compass_output_queues,
             compass_position_queue,
         )
 
