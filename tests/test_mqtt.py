@@ -168,53 +168,83 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
     assert payload["true"]["speed"] == 4.0
 
 
-def test_publish_counts_queued_and_dropped_messages(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        mqtt,
-        "connection_status",
-        {"queued": 0, "confirmed": 0, "dropped": 0, "last_confirmed": None},
-    )
-    results = [
-        mqtt.mqtt.MQTT_ERR_SUCCESS,
-        mqtt.mqtt.MQTT_ERR_NO_CONN,  # kept in the QoS 1 queue until reconnected
-        mqtt.mqtt.MQTT_ERR_QUEUE_SIZE,
-    ]
-    qos_used: list[int] = []
+class _FakeClient:
+    def __init__(self) -> None:
+        self.sent: list[tuple[int, int]] = []  # (timestamp, qos)
 
-    class Client:
-        def publish(self, _topic: str, _payload: str, qos: int) -> SimpleNamespace:
-            qos_used.append(qos)
-            return SimpleNamespace(rc=results.pop(0))
+    def publish(self, _topic: str, payload: str, qos: int) -> SimpleNamespace:
+        self.sent.append((json.loads(payload)["timestamp"], qos))
+        return SimpleNamespace(rc=mqtt.mqtt.MQTT_ERR_SUCCESS)
 
+
+def _positioned(timestamp_s: int) -> aggregate.Second:
     position = aggregate.ShortPositionData(
         latitude=54.0,
         longitude=10.0,
         speed=3.0,
         true_course=90.0,
     )
-    for timestamp_s in range(3):
-        second = replace(_second(timestamp_s), position=position)
-        mqtt.publish_message(Client(), "test/topic", second)  # type: ignore[arg-type]
-    mqtt.publish_callback(None, None, 1)  # type: ignore[arg-type]
+    return replace(_second(timestamp_s), position=position)
 
-    assert qos_used == [1, 1, 1]
+
+@pytest.fixture
+def fresh_status(monkeypatch: pytest.MonkeyPatch) -> dict:
+    status = {
+        "state": "fail",
+        "error_count": 0,
+        "queued": 0,
+        "confirmed": 0,
+        "dropped": 0,
+        "last_confirmed": None,
+    }
+    monkeypatch.setattr(mqtt, "connection_status", status)
+    return status
+
+
+def test_publisher_drops_the_oldest_while_offline(fresh_status: dict) -> None:
+    client = _FakeClient()
+    publisher = mqtt.Publisher(client, "test/topic", max_queued=3)  # type: ignore[arg-type]
+
+    for timestamp_s in range(5):
+        publisher(_positioned(timestamp_s))
+    assert client.sent == []  # offline, nothing handed to paho
+
+    fresh_status["state"] = "success"
+    publisher.flush()
+    assert client.sent == [(2, 1), (3, 1), (4, 1)]
+
     status = mqtt.status()
-    assert status["queued"] == 2
-    assert status["dropped"] == 1
-    assert status["confirmed"] == 1
-    assert status["pending"] == 1
+    assert status["queued"] == 5
+    assert status["dropped"] == 2
+    assert status["pending"] == 3
+
+    for _ in range(3):
+        publisher.on_publish(None, None, 0)  # type: ignore[arg-type]
+    status = mqtt.status()
+    assert status["confirmed"] == 3
+    assert status["pending"] == 0
+    assert status["last_confirmed"] is not None
 
 
-def test_publish_message_keeps_directions_below_360() -> None:
-    published: list[str] = []
+def test_publisher_hands_paho_one_window_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_status: dict,
+) -> None:
+    monkeypatch.setattr(mqtt, "WINDOW", 2)
+    client = _FakeClient()
+    publisher = mqtt.Publisher(client, "test/topic")  # type: ignore[arg-type]
+    for timestamp_s in range(4):
+        publisher(_positioned(timestamp_s))
 
-    class Client:
-        def publish(self, _topic: str, payload: str, qos: int) -> SimpleNamespace:  # noqa: ARG002
-            published.append(payload)
-            return SimpleNamespace(rc=mqtt.mqtt.MQTT_ERR_SUCCESS)
+    fresh_status["state"] = "success"
+    publisher.flush()
+    assert [t for t, _ in client.sent] == [0, 1]
 
+    publisher.on_publish(None, None, 0)  # type: ignore[arg-type]
+    assert [t for t, _ in client.sent] == [0, 1, 2]
+
+
+def test_message_payload_keeps_directions_below_360() -> None:
     wind = PolarCoordinates(angle=math.radians(359.6), magnitude=4.0)
     second = aggregate.Second(
         timestamp_s=1,
@@ -227,8 +257,7 @@ def test_publish_message_keeps_directions_below_360() -> None:
             true_course=359.7,
         ),
     )
-    mqtt.publish_message(Client(), "test/topic", second)  # type: ignore[arg-type]
-    payload = json.loads(published[0])
+    payload = json.loads(mqtt.message_payload(second) or "")
     assert payload["true"]["direction"] == 0
     assert payload["apparent"]["direction"] == 0
     assert payload["gps"]["heading"] == 0
