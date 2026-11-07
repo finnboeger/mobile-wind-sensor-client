@@ -63,6 +63,20 @@ DEVICES: dict[str, Callable[[int, int | None], MagnetometerDevice]] = {
 }
 
 
+def channel_names(devices: list[str]) -> list[str]:
+    """
+    Return a unique name for each configured magnetometer.
+
+    The name is the device's, with a number appended from the second magnetometer of
+    the same kind on, e.g. "mmc5983ma" and "mmc5983ma_2".
+    """
+    names: list[str] = []
+    for device in devices:
+        count = devices[: len(names) + 1].count(device)
+        names.append(device if count == 1 else f"{device}_{count}")
+    return names
+
+
 @dataclass(frozen=True, kw_only=True)
 class ConfiguredMagnetometer:
     name: str
@@ -154,10 +168,11 @@ def create_reader(
         [
             ConfiguredMagnetometer(
                 name=name,
-                device=DEVICES[name](magnetometer_config.I2C_BUS, address),
+                device=DEVICES[device](magnetometer_config.I2C_BUS, address),
                 axes=axes,
             )
-            for name, address, axes in zip(
+            for name, device, address, axes in zip(
+                channel_names(magnetometer_config.DEVICES),
                 magnetometer_config.DEVICES,
                 magnetometer_config.ADDRESSES,
                 magnetometer_config.AXES,

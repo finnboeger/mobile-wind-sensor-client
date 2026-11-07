@@ -109,6 +109,8 @@ class MagnetometerConfig:
     SAMPLE_RATE_HZ: float
     #: magnetic declination in degrees, positive when magnetic north is east of true
     DECLINATION_DEGREES: float
+    #: bench calibration file of each magnetometer, "{sensor}" is replaced by its name
+    BENCH_CALIBRATION_FILE: str
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -385,6 +387,13 @@ class Config:
                 "DECLINATION_DEGREES",
                 float,
                 0.0,
+            ),
+            BENCH_CALIBRATION_FILE=get(
+                config,
+                "MAGNETOMETER",
+                "BENCH_CALIBRATION_FILE",
+                str,
+                "compass_bench_{sensor}.json",
             ),
         )
 
