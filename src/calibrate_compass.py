@@ -12,10 +12,12 @@ Usage, from the ``src`` directory with the config.ini of the unit:
 - ``python calibrate_compass.py --live 90`` reads the magnetometers for 90 seconds
 - ``python calibrate_compass.py <data log dir>/magnetometer.log`` uses a recording
 
-All configured magnetometers are calibrated from the same rotation. Each result is
-written to ``MAGNETOMETER.BENCH_CALIBRATION_FILE`` (or ``--output``) with
-``{sensor}`` replaced by the magnetometer's name. Changing ``MAGNETOMETER.AXES``
-afterwards invalidates it.
+All configured magnetometers are calibrated from the same rotation, which also
+gives the angles between them: every further magnetometer is turned into the axes of
+the first one, so that the compass can compare their fields. Each result is written
+to ``MAGNETOMETER.BENCH_CALIBRATION_FILE`` (or ``--output``) with ``{sensor}``
+replaced by the magnetometer's name. Changing ``MAGNETOMETER.AXES`` afterwards
+invalidates it.
 """
 
 import argparse
@@ -27,7 +29,14 @@ from pathlib import Path
 from typing import Any
 
 import magnetometer
-from compass_calibration import bench_calibration_file, fit_ellipsoid
+from compass_calibration import (
+    BenchCalibration,
+    align_bench_calibration,
+    bench_calibration_file,
+    fit_ellipsoid,
+    fit_rotation,
+    rotation_angle,
+)
 from config import Config
 from log import DATA_SEPARATOR
 from structs import Vector3
@@ -116,14 +125,14 @@ def coverage(samples: list[Vector3], center: Vector3) -> float:
     return len(seen) / len(directions)
 
 
-def calibrate(name: str, samples: list[Vector3], output: str) -> bool:
-    """Fit and save the bench calibration of one magnetometer."""
+def calibrate(name: str, samples: list[Vector3]) -> BenchCalibration | None:
+    """Fit the bench calibration of one magnetometer."""
     result = fit_ellipsoid(samples)
     if result is None:
         sys.stdout.write(
             f"{name}: calibration failed with {len(samples)} samples. Turn it more.\n",
         )
-        return False
+        return None
 
     calibration = result.calibration
     covered = coverage(samples, calibration.offset)
@@ -135,9 +144,62 @@ def calibrate(name: str, samples: list[Vector3], output: str) -> bool:
     )
     if covered < MIN_COVERAGE:
         sys.stdout.write("  Warning: turn the unit in more directions and repeat.\n")
-    calibration.save(output)
-    sys.stdout.write(f"  Written to {output}\n")
-    return True
+    return calibration
+
+
+def align(
+    name: str,
+    calibration: BenchCalibration,
+    samples: list[Vector3],
+    reference: BenchCalibration,
+    reference_samples: list[Vector3],
+) -> BenchCalibration | None:
+    """
+    Turn a magnetometer's calibrated field into the axes of the reference.
+
+    Both were turned together, so after their calibrations they measured the same
+    field at the same time, only in axes that differ by how the chips sit on the
+    board. Once aligned, the two can be compared vector by vector.
+    """
+    if len(samples) != len(reference_samples):
+        sys.stdout.write(f"  {name}: samples don't match the reference, not aligned\n")
+        return None
+    rotation = fit_rotation(
+        [calibration.apply(sample) for sample in samples],
+        [reference.apply(sample) for sample in reference_samples],
+    )
+    if rotation is None:
+        return None
+    sys.stdout.write(
+        f"  {name}: turned by {math.degrees(rotation_angle(rotation)):.1f}° "
+        "into the axes of the first magnetometer\n",
+    )
+    return align_bench_calibration(calibration, rotation)
+
+
+def calibrate_all(
+    names: list[str],
+    samples: list[list[Vector3]],
+) -> list[BenchCalibration | None]:
+    """Calibrate every magnetometer and align them with the first one."""
+    calibrations = [
+        calibrate(name, sensor_samples)
+        for name, sensor_samples in zip(names, samples, strict=True)
+    ]
+    reference = calibrations[0]
+    if reference is None:
+        return calibrations
+    for index in range(1, len(names)):
+        calibration = calibrations[index]
+        if calibration is not None:
+            calibrations[index] = align(
+                names[index],
+                calibration,
+                samples[index],
+                reference,
+                samples[0],
+            )
+    return calibrations
 
 
 def main() -> None:
@@ -162,11 +224,13 @@ def main() -> None:
         parser.error("give either log files or --live SECONDS")
 
     pattern = args.output or magnetometer_config.BENCH_CALIBRATION_FILE
-    results = [
-        calibrate(name, sensor_samples, bench_calibration_file(pattern, name))
-        for name, sensor_samples in zip(names, samples, strict=True)
-    ]
-    if not all(results):
+    calibrations = calibrate_all(names, samples)
+    for name, calibration in zip(names, calibrations, strict=True):
+        if calibration is not None:
+            output = bench_calibration_file(pattern, name)
+            calibration.save(output)
+            sys.stdout.write(f"{name}: written to {output}\n")
+    if not all(calibrations):
         sys.exit(1)
 
 

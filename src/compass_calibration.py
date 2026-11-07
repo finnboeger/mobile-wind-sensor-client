@@ -7,8 +7,10 @@ The iron that travels with the sensor (the board, the enclosure, connectors and
 screws) adds a constant field (hard iron) and distorts the earth's field depending on
 its direction (soft iron). Seen from the sensor both turn with it, so they can be
 measured once on the bench: turn the finished unit in every direction and fit an
-ellipsoid to the readings. The correction maps that ellipsoid back to a sphere. See
-``calibrate_compass.py``.
+ellipsoid to the readings. The correction maps that ellipsoid back to a sphere. With
+more than one magnetometer the same rotation also gives the small angles between
+the chips on the board, so every magnetometer's field can be turned into the axes of
+the first one (:py:func:`fit_rotation`). See ``calibrate_compass.py``.
 
 The boat's iron (engine, battery, fuel tank, fittings) turns with the sensor only
 when the whole boat turns, so it can't be removed on the bench.
@@ -34,8 +36,11 @@ from utils.linalg import (
     Matrix,
     identity,
     least_squares,
+    mat_mul,
     mat_vec,
+    norm,
     solve,
+    symmetric_eigen,
     symmetric_power,
 )
 
@@ -189,6 +194,66 @@ def fit_ellipsoid(samples: list[Vector3]) -> BenchFitResult | None:
     ]
     residual = math.sqrt(sum(d * d for d in deviations) / len(deviations))
     return BenchFitResult(calibration=calibration, residual=residual)
+
+
+def fit_rotation(source: list[Vector3], target: list[Vector3]) -> Matrix | None:
+    """
+    Find the rotation that best turns the source vectors into the target vectors.
+
+    This is Horn's method: the rotation, as a quaternion, is the eigenvector of the
+    largest eigenvalue of a 4x4 matrix built from the cross covariance. Only the
+    directions of the vectors are used.
+
+    :return: rotation matrix R with ``target ≈ R @ source``, or None if there are
+        too few pairs
+    """
+    pairs = [
+        (a, b)
+        for a, b in zip(source, target, strict=True)
+        if norm(a) > 0 and norm(b) > 0
+    ]
+    if len(pairs) < MIN_BENCH_SAMPLES:
+        return None
+    # s[i][j] = mean of source_i * target_j
+    s = [[0.0] * 3 for _ in range(3)]
+    for a, b in pairs:
+        length_a, length_b = norm(a), norm(b)
+        for i in range(3):
+            for j in range(3):
+                s[i][j] += a[i] * b[j] / (length_a * length_b * len(pairs))
+    (xx, xy, xz), (yx, yy, yz), (zx, zy, zz) = s
+    horn = [
+        [xx + yy + zz, yz - zy, zx - xz, xy - yx],
+        [yz - zy, xx - yy - zz, xy + yx, zx + xz],
+        [zx - xz, xy + yx, -xx + yy - zz, yz + zy],
+        [xy - yx, zx + xz, yz + zy, -xx - yy + zz],
+    ]
+    values, vectors = symmetric_eigen(horn)
+    largest = values.index(max(values))
+    w, x, y, z = (vectors[row][largest] for row in range(4))
+    return [
+        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+    ]
+
+
+def rotation_angle(rotation: Matrix) -> float:
+    """Return the angle in rad of a rotation matrix."""
+    trace = rotation[0][0] + rotation[1][1] + rotation[2][2]
+    return math.acos(max(-1.0, min(1.0, (trace - 1) / 2)))
+
+
+def align_bench_calibration(
+    calibration: BenchCalibration,
+    rotation: Matrix,
+) -> BenchCalibration:
+    """Return the calibration followed by a rotation into another sensor's axes."""
+    return BenchCalibration(
+        offset=calibration.offset,
+        matrix=mat_mul(rotation, calibration.matrix),
+        field_strength=calibration.field_strength,
+    )
 
 
 #: number of bins the horizontal field direction is sorted into
