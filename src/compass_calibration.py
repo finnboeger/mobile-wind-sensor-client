@@ -16,6 +16,9 @@ when the whole boat turns, so it can't be removed on the bench.
 fits an ellipse (or a circle while the coverage is incomplete) to the horizontal
 field after levelling, sorted into direction bins so that long straight runs don't
 dominate the fit.
+
+:py:class:`GnssAlignment` finally learns the constant offset between the compass
+heading and the course over ground on straight runs at speed.
 """
 
 import json
@@ -40,6 +43,17 @@ logger = logging.getLogger(__name__)
 
 #: minimum number of samples for a bench calibration
 MIN_BENCH_SAMPLES = 50
+
+
+def _circular_mean(angles: list[float]) -> float:
+    return math.atan2(
+        sum(math.sin(a) for a in angles),
+        sum(math.cos(a) for a in angles),
+    )
+
+
+def _wrap(angle: float) -> float:
+    return (angle + math.pi) % math.tau - math.pi
 
 
 def write_json_atomically(path: str | Path, data: dict[str, Any]) -> None:
@@ -462,3 +476,92 @@ class ContinuousCalibration:
             int(i): _Bin(x=float(x), y=float(y), weight=float(w))
             for i, x, y, w in state.get("bins", [])
         }
+
+
+#: number of heading sectors the offset is averaged over
+ALIGNMENT_BINS = 12
+#: samples per sector after which older samples are slowly forgotten
+MAX_ALIGNMENT_WEIGHT = 100.0
+#: samples a sector needs before it counts
+MIN_ALIGNMENT_WEIGHT = 10.0
+#: sectors needed before the offset is used
+MIN_ALIGNMENT_BINS = 4
+#: the sectors must be spread out: the mean of their unit vectors must be shorter
+MAX_ALIGNMENT_CONCENTRATION = 0.5
+#: offsets larger than this are assumed to be wrong and not applied
+MAX_ALIGNMENT_OFFSET = math.radians(45)
+
+
+class GnssAlignment:
+    """
+    Learns the offset from the compass heading to the course over ground.
+
+    Only straight runs at speed are used, when the boat moves where it points. The
+    offset is averaged per heading sector first, so that a current, which shifts the
+    course by a different amount on each heading, averages out. It contains the
+    error of the declination setting and what's left of the boat's iron.
+    """
+
+    def __init__(self) -> None:
+        #: sector -> [sum of cos, sum of sin, weight]
+        self._bins: dict[int, list[float]] = {}
+        self.offset: float | None = None
+
+    def add_sample(self, heading: float, course_over_ground: float) -> None:
+        """
+        Add a pair of heading and course over ground, both in radians.
+
+        :param heading: heading of the bow from the compass, before this alignment
+        :param course_over_ground: true course over ground
+        """
+        index = int((heading % math.tau) / math.tau * ALIGNMENT_BINS) % ALIGNMENT_BINS
+        difference = _wrap(course_over_ground - heading)
+        current = self._bins.setdefault(index, [0.0, 0.0, 0.0])
+        if current[2] >= MAX_ALIGNMENT_WEIGHT:
+            decay = (MAX_ALIGNMENT_WEIGHT - 1) / MAX_ALIGNMENT_WEIGHT
+            current[0] *= decay
+            current[1] *= decay
+            current[2] *= decay
+        current[0] += math.cos(difference)
+        current[1] += math.sin(difference)
+        current[2] += 1
+        self._update_offset()
+
+    def _update_offset(self) -> None:
+        used = [(i, b) for i, b in self._bins.items() if b[2] >= MIN_ALIGNMENT_WEIGHT]
+        if len(used) < MIN_ALIGNMENT_BINS:
+            return
+        sector_angles = [(i + 0.5) / ALIGNMENT_BINS * math.tau for i, _ in used]
+        concentration = math.hypot(
+            sum(math.cos(a) for a in sector_angles),
+            sum(math.sin(a) for a in sector_angles),
+        ) / len(used)
+        if concentration > MAX_ALIGNMENT_CONCENTRATION:
+            return
+        offset = _circular_mean([math.atan2(b[1], b[0]) for _, b in used])
+        if abs(offset) > MAX_ALIGNMENT_OFFSET:
+            logger.warning(
+                "Compass heading differs from the course over ground by %.1f°, "
+                "not applying it. Check the sensor orientation settings.",
+                math.degrees(offset),
+            )
+            return
+        if self.offset is None:
+            logger.info(
+                "Compass aligned with the course over ground: %.1f°",
+                math.degrees(offset),
+            )
+        self.offset = offset
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "offset": self.offset,
+            "bins": [[i, *b] for i, b in self._bins.items()],
+        }
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        self._bins = {
+            int(i): [float(c), float(s), float(w)]
+            for i, c, s, w in state.get("bins", [])
+        }
+        self.offset = state.get("offset")
