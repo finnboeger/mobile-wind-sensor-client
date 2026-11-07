@@ -19,6 +19,11 @@ CONNACK = bytes([0x20, 0x03, 0x00, 0x00, 0x00])
 PUBLISH = 3
 
 
+def _puback(packet_id: bytes) -> bytes:
+    # MQTT v5 PUBACK with reason "Success", which may be left out
+    return bytes([0x40, 0x02]) + packet_id
+
+
 def _unused_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -48,13 +53,14 @@ def _read_packet(conn: socket.socket) -> tuple[int, bytes]:
     return packet_type, _read_exactly(conn, length)
 
 
-def _parse_publish(body: bytes) -> tuple[str, dict]:
-    """Topic and JSON payload of a QoS 0 MQTT v5 PUBLISH."""
+def _parse_publish(body: bytes) -> tuple[str, bytes, dict]:
+    """Topic, packet identifier and JSON payload of a QoS 1 MQTT v5 PUBLISH."""
     topic_length = int.from_bytes(body[:2])
     topic = body[2 : 2 + topic_length].decode()
-    rest = body[2 + topic_length :]
+    packet_id = body[2 + topic_length : 4 + topic_length]
+    rest = body[4 + topic_length :]
     properties_length = rest[0]  # a single byte for the empty property list paho sends
-    return topic, json.loads(rest[1 + properties_length :])
+    return topic, packet_id, json.loads(rest[1 + properties_length :])
 
 
 def _wind(timestamp: int) -> tuple[CorrectedApparentWindData, TrueWindData]:
@@ -95,7 +101,18 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
             TOPIC="test/topic",
         ),
     )
-    monkeypatch.setattr(mqtt, "connection_status", {"state": None, "error_count": 0})
+    monkeypatch.setattr(
+        mqtt,
+        "connection_status",
+        {
+            "state": None,
+            "error_count": 0,
+            "queued": 0,
+            "confirmed": 0,
+            "dropped": 0,
+            "last_confirmed": None,
+        },
+    )
 
     position_queue: Queue[PositionData] = Queue()
     wind_queue: Queue[tuple[CorrectedApparentWindData, TrueWindData]] = Queue()
@@ -135,20 +152,99 @@ def test_worker_connects_once_broker_is_reachable_and_publishes(
             assert mqtt.connection_status["state"] == "success"
             assert mqtt.connection_status["error_count"] >= 1
 
-    topic, payload = _parse_publish(body)
+            topic, packet_id, payload = _parse_publish(body)
+            assert mqtt.status()["pending"] == 1
+            conn.sendall(_puback(packet_id))
+            deadline = time.monotonic() + TIMEOUT_S
+            while mqtt.status()["pending"] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            status = mqtt.status()
+            assert status["confirmed"] == 1
+            assert status["pending"] == 0
+            assert status["last_confirmed"] is not None
+
     assert topic == "test/topic"
     assert payload["timestamp"] == 1
     assert payload["true"]["speed"] == 4.0
 
 
-def test_publish_message_keeps_directions_below_360() -> None:
-    published: list[str] = []
+class _FakeClient:
+    def __init__(self) -> None:
+        self.sent: list[tuple[int, int]] = []  # (timestamp, qos)
 
-    class Client:
-        def publish(self, _topic: str, payload: str, qos: int) -> SimpleNamespace:  # noqa: ARG002
-            published.append(payload)
-            return SimpleNamespace(rc=mqtt.mqtt.MQTT_ERR_SUCCESS)
+    def publish(self, _topic: str, payload: str, qos: int) -> SimpleNamespace:
+        self.sent.append((json.loads(payload)["timestamp"], qos))
+        return SimpleNamespace(rc=mqtt.mqtt.MQTT_ERR_SUCCESS)
 
+
+def _positioned(timestamp_s: int) -> aggregate.Second:
+    position = aggregate.ShortPositionData(
+        latitude=54.0,
+        longitude=10.0,
+        speed=3.0,
+        true_course=90.0,
+    )
+    return replace(_second(timestamp_s), position=position)
+
+
+@pytest.fixture
+def fresh_status(monkeypatch: pytest.MonkeyPatch) -> dict:
+    status = {
+        "state": "fail",
+        "error_count": 0,
+        "queued": 0,
+        "confirmed": 0,
+        "dropped": 0,
+        "last_confirmed": None,
+    }
+    monkeypatch.setattr(mqtt, "connection_status", status)
+    return status
+
+
+def test_publisher_drops_the_oldest_while_offline(fresh_status: dict) -> None:
+    client = _FakeClient()
+    publisher = mqtt.Publisher(client, "test/topic", max_queued=3)  # type: ignore[arg-type]
+
+    for timestamp_s in range(5):
+        publisher(_positioned(timestamp_s))
+    assert client.sent == []  # offline, nothing handed to paho
+
+    fresh_status["state"] = "success"
+    publisher.flush()
+    assert client.sent == [(2, 1), (3, 1), (4, 1)]
+
+    status = mqtt.status()
+    assert status["queued"] == 5
+    assert status["dropped"] == 2
+    assert status["pending"] == 3
+
+    for _ in range(3):
+        publisher.on_publish(None, None, 0)  # type: ignore[arg-type]
+    status = mqtt.status()
+    assert status["confirmed"] == 3
+    assert status["pending"] == 0
+    assert status["last_confirmed"] is not None
+
+
+def test_publisher_hands_paho_one_window_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+    fresh_status: dict,
+) -> None:
+    monkeypatch.setattr(mqtt, "WINDOW", 2)
+    client = _FakeClient()
+    publisher = mqtt.Publisher(client, "test/topic")  # type: ignore[arg-type]
+    for timestamp_s in range(4):
+        publisher(_positioned(timestamp_s))
+
+    fresh_status["state"] = "success"
+    publisher.flush()
+    assert [t for t, _ in client.sent] == [0, 1]
+
+    publisher.on_publish(None, None, 0)  # type: ignore[arg-type]
+    assert [t for t, _ in client.sent] == [0, 1, 2]
+
+
+def test_message_payload_keeps_directions_below_360() -> None:
     wind = PolarCoordinates(angle=math.radians(359.6), magnitude=4.0)
     second = aggregate.Second(
         timestamp_s=1,
@@ -161,8 +257,7 @@ def test_publish_message_keeps_directions_below_360() -> None:
             true_course=359.7,
         ),
     )
-    mqtt.publish_message(Client(), "test/topic", second)  # type: ignore[arg-type]
-    payload = json.loads(published[0])
+    payload = json.loads(mqtt.message_payload(second) or "")
     assert payload["true"]["direction"] == 0
     assert payload["apparent"]["direction"] == 0
     assert payload["gps"]["heading"] == 0
