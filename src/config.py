@@ -107,6 +107,8 @@ class MagnetometerConfig:
     AXES: list[str]
     #: sample rate in Hz
     SAMPLE_RATE_HZ: float
+    #: magnetic declination in degrees, positive when magnetic north is east of true
+    DECLINATION_DEGREES: float
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -377,6 +379,13 @@ class Config:
                 "AXES",
             ),
             SAMPLE_RATE_HZ=get(config, "MAGNETOMETER", "SAMPLE_RATE_HZ", float, 20.0),
+            DECLINATION_DEGREES=get(
+                config,
+                "MAGNETOMETER",
+                "DECLINATION_DEGREES",
+                float,
+                0.0,
+            ),
         )
 
     def __repr__(self) -> str:

@@ -3,6 +3,7 @@ import logging.handlers
 import threading
 from queue import Queue
 
+import compass
 import gps
 import imu
 import magnetometer
@@ -11,7 +12,7 @@ import nmea
 import wind
 from config import Config
 from log import DATA_SEPARATOR
-from structs import ImuSample, PositionQueue, WindOutputQueue
+from structs import ImuSample, MagnetometerSample, PositionQueue, WindOutputQueue
 
 
 def init_logging() -> None:
@@ -78,10 +79,24 @@ if __name__ == "__main__":
     gps.init(position_output_queues)
     # The IMU samples feed the gyro aided heading of the wind worker
     wind_imu_queue: Queue[list[ImuSample]] = Queue()
-    imu.init([wind_imu_queue])
-    # only recorded for now, see the [MAGNETOMETER] section of the config
-    magnetometer.init([])
-    n2k_node, heading_queue, wind_queue = nmea.init()
+    imu_output_queues = [wind_imu_queue]
+    # The heading comes from the unit's own magnetometers if they are enabled, which
+    # needs the IMU for roll and pitch, otherwise from a compass on NMEA 2000
+    use_magnetometers = Config().MAGNETOMETER.ENABLED
+    if use_magnetometers and not Config().IMU.ENABLED:
+        logging.getLogger(__name__).error(
+            "The magnetometers need the IMU, enable it with IMU.ENABLED",
+        )
+        use_magnetometers = False
+    compass_imu_queue: Queue[list[ImuSample]] = Queue()
+    magnetometer_queue: Queue[list[MagnetometerSample]] = Queue()
+    if use_magnetometers:
+        imu_output_queues.append(compass_imu_queue)
+        use_magnetometers = magnetometer.init([magnetometer_queue])
+    imu.init(imu_output_queues)
+    n2k_node, heading_queue, wind_queue = nmea.init(read_heading=not use_magnetometers)
+    if use_magnetometers:
+        compass.init(compass_imu_queue, magnetometer_queue, [heading_queue])
 
     # Forward the GPS data to the NMEA2000 network
     threading.Thread(

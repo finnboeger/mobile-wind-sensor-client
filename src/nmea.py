@@ -16,11 +16,15 @@ from structs import (
 MAX_WIND_SPEED = 200  # m/s, values above this are considered invalid
 
 
-def init() -> tuple[n2k.Node, Queue[HeadingData], Queue[WindData]]:
+def init(
+    *,
+    read_heading: bool = True,
+) -> tuple[n2k.Node, Queue[HeadingData], Queue[WindData]]:
     """
     Initialize the NMEA2000 Node.
 
-    :return: _description_
+    :param read_heading: pass on the headings of a compass on the network
+    :return: the node, and queues receiving the compass headings and the wind
     """
     bus = can.Bus("can0", interface="socketcan")
 
@@ -37,7 +41,7 @@ def init() -> tuple[n2k.Node, Queue[HeadingData], Queue[WindData]]:
     node.set_product_information("Test", "0.0.1", "Dev", "00000000001", 5)
     node.set_configuration_information()
 
-    handler = Handler(node)
+    handler = Handler(node, read_heading=read_heading)
     node.attach_msg_handler(handler)
 
     # Create a notifier to handle incoming messages
@@ -53,8 +57,11 @@ class Handler(n2k.MessageHandler):
     def __init__(
         self,
         node: n2k.Node,
+        *,
+        read_heading: bool = True,
     ) -> None:
         super().__init__(0, node)
+        self.read_heading = read_heading
         self.heading_queue = Queue()
         self.wind_queue = Queue()
 
@@ -78,7 +85,7 @@ class Handler(n2k.MessageHandler):
             log.data("wind", wind_data)
             return
 
-        if msg.pgn == n2k.PGN.VesselHeading:
+        if msg.pgn == n2k.PGN.VesselHeading and self.read_heading:
             heading = n2k.messages.parse_n2k_heading(msg).heading
             if heading is None or heading > math.tau or heading < -math.tau:
                 # bad heading (radians)

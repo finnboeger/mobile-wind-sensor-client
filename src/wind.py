@@ -186,10 +186,14 @@ def create_motion() -> UnitMotion | None:
     imu_config = config.Config().IMU
     if not imu_config.ENABLED:
         return None
+    # the heading from the unit's own magnetometers isn't damped
+    compass_lag = (
+        0.0 if config.Config().MAGNETOMETER.ENABLED else imu_config.COMPASS_LAG_SECONDS
+    )
     return UnitMotion(
         HeadingFilter(
             compass_sigma=math.radians(imu_config.COMPASS_SIGMA_DEGREES),
-            compass_lag=imu_config.COMPASS_LAG_SECONDS,
+            compass_lag=compass_lag,
         ),
         wind_sensor_position=imu_config.WIND_SENSOR_POSITION,
         gps_antenna_position=imu_config.GPS_ANTENNA_POSITION,
