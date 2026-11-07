@@ -5,6 +5,7 @@ from queue import Queue
 
 import gps
 import imu
+import magnetometer
 import mqtt
 import nmea
 import wind
@@ -78,6 +79,8 @@ if __name__ == "__main__":
     # The IMU samples feed the gyro aided heading of the wind worker
     wind_imu_queue: Queue[list[ImuSample]] = Queue()
     imu.init([wind_imu_queue])
+    # only recorded for now, see the [MAGNETOMETER] section of the config
+    magnetometer.init([])
     n2k_node, heading_queue, wind_queue = nmea.init()
 
     # Forward the GPS data to the NMEA2000 network
