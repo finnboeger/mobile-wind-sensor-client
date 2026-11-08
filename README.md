@@ -154,62 +154,58 @@ cat << "EOF"  | sudo tee /etc/NetworkManager/dispatcher.d/99-modem-route
 
 INTERFACE=$1
 ACTION=$2
+# Interface of the 4G modem: usb0 for the SIM7600 HAT in RNDIS mode, eth0/eth1 on some setups
+MODEM_INTERFACE=usb0
 TABLE_ID=200
 TARGET_METRIC=800
 
-# Only run for eth0 when it connects or updates DHCP
-if [ "$INTERFACE" = "eth0" ]; then
+# Remove every rule that points to our table. "ip rule" prints the table by name if
+# it has one in /etc/iproute2/rt_tables (e.g. "lookup modem" instead of "lookup 200"),
+# so grepping its output misses them and rules pile up whenever the modem's IP changes.
+# "ip rule del table N" matches by number and fails once none is left.
+remove_rules() {
+    while ip rule del table $TABLE_ID 2>/dev/null; do :; done
+}
+
+if [ "$INTERFACE" = "$MODEM_INTERFACE" ]; then
     if [ "$ACTION" = "up" ] || [ "$ACTION" = "dhcp4-change" ]; then
 
-        # 1. Get current IP and Gateway of the modem
-        # We use ip command as it's reliable.
-        IP_ADDR=$(ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+        # 1. Get the current IP of the modem interface
+        IP_ADDR=$(ip -4 -o addr show "$MODEM_INTERFACE" | awk '{split($4, a, "/"); print a[1]; exit}')
 
-        # Extract Gateway (usually x.x.x.1)
-        # We look for the default route associated with eth0
-        GATEWAY=$(ip route show dev eth0 | grep default | awk '{print $3}')
+        # The default route NetworkManager added (before we moved it to TARGET_METRIC)
+        GATEWAY=$(ip -4 route show default dev "$MODEM_INTERFACE" | awk '{print $3; exit}')
 
-        # Fallback: if no default route found (due to metric), assume gateway is X.X.X.1
+        # Fallback: if no default route found, assume the gateway is X.X.X.1
         if [ -z "$GATEWAY" ]; then
             GATEWAY=$(echo "$IP_ADDR" | awk -F. '{print $1"."$2"."$3".1"}')
         fi
 
-        # 2. Safety Check: Ensure we have values
+        # 2. Safety check: ensure we have values
         if [ -n "$IP_ADDR" ] && [ -n "$GATEWAY" ]; then
 
-            # 3. Clean up old rules to prevent duplicates (ignore errors)
-            # We try to delete any rule pointing to table 200 to be safe
-            ip rule show | grep "lookup $TABLE_ID" | while read -r line; do
-                # Extract the source IP from the rule and delete it
-                SRC=$(echo "$line" | grep -oP '(?<=from\s)\d+(\.\d+){3}')
-                if [ -n "$SRC" ]; then
-                    ip rule del from "$SRC" table $TABLE_ID
-                fi
-            done
-
-            # 4. Apply the Policy Routing (Table 200) for specific binding
+            # 3. Policy routing (table TABLE_ID) for traffic bound to the modem's address
+            remove_rules
             ip rule add from "$IP_ADDR" table $TABLE_ID
-            ip route add default via "$GATEWAY" dev eth0 table $TABLE_ID
+            ip route replace default via "$GATEWAY" dev "$MODEM_INTERFACE" table $TABLE_ID
 
-            # 5. Fix Main Routing Priority
-            # Remove the automatic default route (usually metric 100) and re-add it as backup (metric 800)
-            # This ensures wlan0 (metric 600) remains the primary default gateway.
-            ip route del default dev eth0 2>/dev/null
-            ip route add default via "$GATEWAY" dev eth0 metric $TARGET_METRIC 2>/dev/null
+            # 4. Main table: keep the modem as backup (metric TARGET_METRIC) so wlan0
+            # (metric 600) stays the primary default gateway when it is connected.
+            # Add the new route before removing the others, so there is never a moment
+            # without a default route.
+            ip route replace default via "$GATEWAY" dev "$MODEM_INTERFACE" metric $TARGET_METRIC
+            ip -4 route show default dev "$MODEM_INTERFACE" | grep -v "metric $TARGET_METRIC" | while read -r route; do
+                ip route del $route dev "$MODEM_INTERFACE"
+            done
 
             # Log to syslog for debugging (view with: journalctl -t "modem-route")
             logger -t "modem-route" "Applied routing: IP $IP_ADDR via GW $GATEWAY table $TABLE_ID (Metric set to $TARGET_METRIC)"
         fi
     fi
 
-    # Cleanup when interface goes down
+    # Cleanup when the interface goes down
     if [ "$ACTION" = "down" ]; then
-         ip rule show | grep "lookup $TABLE_ID" | while read -r line; do
-            SRC=$(echo "$line" | grep -oP '(?<=from\s)\d+(\.\d+){3}')
-            if [ -n "$SRC" ]; then
-                ip rule del from "$SRC" table $TABLE_ID
-            fi
-        done
+        remove_rules
     fi
 fi
 EOF
