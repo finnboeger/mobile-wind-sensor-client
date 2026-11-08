@@ -5,6 +5,22 @@
     <div v-if="unreachable" class="banner bad">The windbot can't be reached.</div>
     <p v-else-if="!status" class="muted">Loading…</p>
     <div class="grid">
+      <section class="card">
+        <h2>
+          Internet check
+          <span class="age">{{ checking ? "checking…" : checkedAgo }}</span>
+          <button class="btn small" :disabled="checking" @click="checkInternet">Check now</button>
+        </h2>
+        <p v-if="internetError" class="muted">The check failed: {{ internetError }}</p>
+        <dl v-if="internet">
+          <template v-for="row in internetRows" :key="row.label">
+            <dt>{{ row.label }}</dt>
+            <dd :class="row.level">{{ row.text }}</dd>
+            <dd v-if="row.detail" class="detail">{{ row.detail }}</dd>
+          </template>
+        </dl>
+        <p v-else-if="!internetError" class="muted">Checking…</p>
+      </section>
       <section v-for="card in cards" :key="card.title" class="card">
         <h2>
           {{ card.title }}
@@ -48,5 +64,17 @@ dt {
 dd {
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+dd.good {
+  color: #2f855a;
+}
+dd.bad {
+  color: #c62828;
+}
+dd.detail {
+  grid-column: 1 / -1;
+  font-size: 0.8rem;
+  color: #6b6f80;
+  overflow-wrap: anywhere;
 }
 </style>

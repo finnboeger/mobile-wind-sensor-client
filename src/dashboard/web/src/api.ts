@@ -73,6 +73,32 @@ export async function fetchStatus(): Promise<StatusResponse> {
   return (await response.json()) as StatusResponse;
 }
 
+/** One check of /api/internet, see src/dashboard/internet.py */
+export interface ReachabilityCheck {
+  ok: boolean;
+  /** what was contacted, e.g. the broker's host:port */
+  target: string;
+  latency_ms?: number;
+  /** address the connection left from, which tells the interface it used */
+  local_address?: string;
+  /** why it failed, e.g. a DNS lookup or connection error */
+  error?: string;
+}
+
+export interface InternetResponse {
+  /** ms since epoch */
+  checked: number;
+  internet: ReachabilityCheck;
+  /** null without an MQTT broker in config.ini */
+  broker: ReachabilityCheck | null;
+}
+
+/** ms the check may take: the windbot gives DNS, connecting and the answer 5 s each */
+const INTERNET_TIMEOUT_MS = 20_000;
+
+/** Let the windbot check now whether the internet and the MQTT broker can be reached */
+export const fetchInternet = () => getJson<InternetResponse>("/api/internet", INTERNET_TIMEOUT_MS);
+
 export interface KnownNetwork {
   uuid: string;
   ssid: string;

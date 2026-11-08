@@ -1,6 +1,6 @@
 [project]
 name = "windbot-client"
-version = "0.3.0"
+version = "0.3.1"
 description = "Mobile wind monitoring system, measuring true wind speed and direction and sending that data over NMEA2000, Internet+MQTT and LoRa"
 authors = [
     { name = "Finn Böger", email="finnboeger@googlemail.com" },

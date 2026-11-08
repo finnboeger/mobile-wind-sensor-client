@@ -10,9 +10,9 @@ import threading
 from collections.abc import Callable
 
 from aggregate import Second
-from config import NetworkConfig
+from config import Config, NetworkConfig
 
-from . import history, server, wifi
+from . import history, internet, server, wifi
 
 
 def init(network_config: NetworkConfig) -> Callable[[Second], None]:
@@ -20,6 +20,11 @@ def init(network_config: NetworkConfig) -> Callable[[Second], None]:
     wifi_manager = wifi.init(network_config)
 
     measurements = history.MeasurementHistory()
+    mqtt_config = Config().MQTT
+    # shared by the servers on every interface, so they reuse one check's result
+    internet_check = internet.InternetCheck(
+        (mqtt_config.BROKER, mqtt_config.PORT) if mqtt_config else None,
+    )
 
     def make_server(address: tuple[str, int], interface: str) -> server.DashboardServer:
         return server.DashboardServer(
@@ -28,6 +33,7 @@ def init(network_config: NetworkConfig) -> Callable[[Second], None]:
             wifi_manager,
             network_config.ADMIN_PASSWORD,
             interface,
+            internet=internet_check,
         )
 
     # lo for e.g. curl on the Pi itself, whose own connections arrive on it

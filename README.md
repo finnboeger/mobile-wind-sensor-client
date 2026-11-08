@@ -32,6 +32,9 @@ It is enabled with `NETWORK.ENABLE_LOCAL_WEBSERVER` and listens on
 - **Live** shows the latest inputs for debugging: apparent wind, heading, GPS fix,
   what the true wind is waiting for, MQTT, network interfaces and the Pi's load,
   temperature and memory.
+  Its *Internet check* tests every minute, and on *Check now*, whether the internet
+  (Google's `generate_204` connectivity check) and the MQTT broker can be reached over
+  the Pi's normal routing, and which interface the connection left through.
   Other modules can add a card by publishing values with `telemetry.update(...)`.
 - **Wi-Fi** shows the connection, lets you add, edit, forget and connect to networks,
   and turn the hotspot on or off without a restart.

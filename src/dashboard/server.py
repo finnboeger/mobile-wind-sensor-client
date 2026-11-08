@@ -8,6 +8,8 @@ releases). It polls the JSON endpoints below.
 - ``GET /api/measurements?since=<ms>&limit=<n>``: one second records, see
   ``history.py``. ``limit`` keeps only the newest ``n`` of them.
 - ``GET /api/status``: live values of the pipeline and the system
+- ``GET /api/internet``: checks now whether the internet and the MQTT broker can be
+  reached, see ``internet.py``
 - ``GET /api/wifi``, ``GET /api/wifi/scan``: Wi-Fi status and networks in reach
 - ``POST /api/wifi/...``: Wi-Fi changes, see ``do_POST``
 """
@@ -38,6 +40,7 @@ from config import Config
 
 from . import commands
 from .history import MeasurementHistory
+from .internet import InternetCheck
 from .wifi import WifiBusyError, WifiError, WifiManager, WifiRequestError
 
 logger = logging.getLogger(__name__)
@@ -196,6 +199,7 @@ class DashboardServer(ThreadingHTTPServer):
         admin_password: str | None,
         interface: str | None = None,
         static_dir: Path = STATIC_DIR,
+        internet: InternetCheck | None = None,
     ) -> None:
         #: only accept connections arriving on this network interface, e.g. so the
         #: dashboard isn't reachable over 4G. Unlike binding to the interface's
@@ -208,6 +212,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.history = history
         self.wifi = wifi
         self.admin_password = admin_password
+        self.internet = internet
         self.system = SystemInfo()
 
     def server_bind(self) -> None:
@@ -322,6 +327,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             "/index.html": self._get_index,
             "/api/measurements": self._get_measurements,
             "/api/status": self._get_status,
+            "/api/internet": self._get_internet,
             "/api/wifi": self._get_wifi,
             "/api/wifi/scan": self._get_scan,
         }
@@ -422,6 +428,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "admin_password_required": self.dashboard.admin_password is not None,
             },
         )
+
+    def _get_internet(self, _: object) -> None:
+        if self.dashboard.internet is None:
+            raise RequestError(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                "The internet check isn't available.",
+            )
+        self._json(self.dashboard.internet.result())
 
     def _get_wifi(self, _: object) -> None:
         self._json(
