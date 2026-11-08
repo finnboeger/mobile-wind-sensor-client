@@ -1,7 +1,14 @@
 // Live values of the pipeline and the system, to see why wind might not be showing up
 // without SSH and logs.
 import { computed, defineComponent, onMounted, onUnmounted, ref } from "vue";
-import { fetchStatus, type StatusResponse, type TelemetrySection } from "../api";
+import {
+  fetchInternet,
+  fetchStatus,
+  type InternetResponse,
+  type ReachabilityCheck,
+  type StatusResponse,
+  type TelemetrySection,
+} from "../api";
 import {
   formatAge,
   formatDirection,
@@ -40,10 +47,74 @@ export default defineComponent({
       if (!stopped) timer = window.setTimeout(poll, POLL_INTERVAL_MS);
     }
 
-    onMounted(() => void poll());
+    /** ms between automatic internet checks */
+    const INTERNET_INTERVAL_MS = 60_000;
+
+    const internet = ref<InternetResponse | null>(null);
+    const internetError = ref<string | null>(null);
+    const checking = ref(false);
+    let internetTimer: number | undefined;
+
+    // Runs right away for the button, and every minute after the last check ended
+    async function checkInternet(): Promise<void> {
+      if (checking.value) return;
+      window.clearTimeout(internetTimer);
+      checking.value = true;
+      try {
+        internet.value = await fetchInternet();
+        internetError.value = null;
+      } catch (e) {
+        internetError.value = e instanceof Error ? e.message : String(e);
+      } finally {
+        checking.value = false;
+      }
+      if (!stopped) internetTimer = window.setTimeout(checkInternet, INTERNET_INTERVAL_MS);
+    }
+
+    function reachability(
+      label: string,
+      check: ReachabilityCheck | null,
+    ): { label: string; text: string; detail: string; level: string } {
+      if (check == null) return { label, text: "not configured", detail: "", level: "" };
+      if (!check.ok) {
+        return { label, text: "not reachable", detail: check.error ?? check.target, level: "bad" };
+      }
+      // the interface the connection left through, as chosen by the Pi's routing
+      const via = status.value?.system.interfaces.find((i) =>
+        i.addresses.includes(check.local_address ?? ""),
+      );
+      const from = check.local_address ? ` from ${check.local_address}${via ? ` (${via.name})` : ""}` : "";
+      return {
+        label,
+        text: `reachable, ${check.latency_ms} ms`,
+        detail: `${check.target}${from}`,
+        level: "good",
+      };
+    }
+
+    const internetRows = computed(() =>
+      internet.value
+        ? [
+            reachability("Internet", internet.value.internet),
+            reachability("MQTT broker", internet.value.broker),
+          ]
+        : [],
+    );
+
+    const checkedAgo = computed(() => {
+      if (!internet.value || !status.value) return "";
+      const seconds = Math.max(0, Math.round((status.value.server_time - internet.value.checked) / 1000));
+      return seconds < 1 ? "checked now" : `checked ${formatAge(seconds)} ago`;
+    });
+
+    onMounted(() => {
+      void poll();
+      void checkInternet();
+    });
     onUnmounted(() => {
       stopped = true;
       window.clearTimeout(timer);
+      window.clearTimeout(internetTimer);
     });
 
     const speed = (value: unknown) => formatSpeed(value, unit);
@@ -187,6 +258,17 @@ export default defineComponent({
       return result;
     });
 
-    return { status, unreachable, age, cards };
+    return {
+      status,
+      unreachable,
+      age,
+      cards,
+      internet,
+      internetError,
+      checking,
+      checkInternet,
+      internetRows,
+      checkedAgo,
+    };
   },
 });

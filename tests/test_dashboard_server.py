@@ -12,6 +12,7 @@ import pytest
 import dashboard.server
 import telemetry
 from dashboard.history import MeasurementHistory
+from dashboard.internet import InternetCheck
 from dashboard.server import (
     DashboardHandler,
     DashboardServer,
@@ -122,6 +123,18 @@ def test_status_replaces_nan(
     assert data["values"]["gps"]["speed"] is None
     assert data["values"]["gps"]["satellites"] == 7
     assert data["admin_password_required"] is True
+
+
+def test_internet(server: DashboardServer) -> None:
+    status, data = request(server, "/api/internet")
+    assert status == 503
+    server.internet = InternetCheck(None, lambda: {"ok": True, "target": "x"})
+    status, data = request(server, "/api/internet")
+    assert status == 200
+    assert data["internet"] == {"ok": True, "target": "x"}
+    assert data["broker"] is None
+    # a read-only check, so no admin password is needed
+    assert "checked" in data
 
 
 def test_wifi_unavailable(server: DashboardServer) -> None:
