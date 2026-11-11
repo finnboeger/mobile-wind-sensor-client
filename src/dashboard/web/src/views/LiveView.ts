@@ -229,6 +229,18 @@ export default defineComponent({
             ],
             mqtt.enabled ? ["Broker", mqtt.broker ?? "—"] : null,
             mqtt.enabled ? ["Connection errors", mqtt.error_count ?? 0] : null,
+            mqtt.enabled ? ["Messages sent", mqtt.queued ?? 0] : null,
+            mqtt.enabled ? ["Confirmed by broker", mqtt.confirmed ?? 0] : null,
+            mqtt.enabled ? ["Pending", mqtt.pending ?? 0] : null,
+            mqtt.enabled ? ["Dropped", mqtt.dropped ?? 0] : null,
+            mqtt.enabled
+              ? [
+                  "Last confirmed",
+                  mqtt.last_confirmed != null
+                    ? `${formatAge(Math.max(0, Math.round(s.server_time / 1000 - mqtt.last_confirmed)))} ago`
+                    : "never",
+                ]
+              : null,
             ...system.interfaces.map(
               (i): [string, string] => [i.name, `${i.up ? "up" : "down"} ${i.addresses.join(", ")}`],
             ),
