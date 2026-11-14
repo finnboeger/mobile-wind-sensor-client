@@ -11,7 +11,10 @@ ellipsoid to the readings. The correction maps that ellipsoid back to a sphere. 
 more than one magnetometer the same rotation also gives the small angles between
 the chips on the board, so every magnetometer's field can be turned into the axes of
 the first one (:py:func:`fit_rotation`), and :py:class:`DriftTracker` can follow
-how the others drift relative to it. See ``calibrate_compass.py``.
+how the others drift relative to it. The accelerometer read during the same
+rotation gives the angle between the first magnetometer and the IMU
+(:py:func:`fit_imu_alignment`), e.g. from a sensing coil that doesn't stand exactly
+upright. See ``calibrate_compass.py``.
 
 The boat's iron (engine, battery, fuel tank, fittings) turns with the sensor only
 when the whole boat turns, so it can't be removed on the bench.
@@ -35,6 +38,7 @@ from typing import Any
 from structs import Vector3
 from utils.linalg import (
     Matrix,
+    cross,
     identity,
     least_squares,
     mat_mul,
@@ -49,6 +53,14 @@ logger = logging.getLogger(__name__)
 
 #: minimum number of samples for a bench calibration
 MIN_BENCH_SAMPLES = 50
+#: the IMU alignment needs the samples to cover the directions at least this well:
+#: the smallest spread of the cross products of field and down, relative to the
+#: field strength squared,
+#: about 0.04 for a rotation in every direction
+MIN_ALIGNMENT_SPREAD = 0.01
+#: Gauss-Newton steps of the IMU alignment, and the step in rad that counts as done
+_ALIGNMENT_ITERATIONS = 10
+_ALIGNMENT_TOLERANCE = 1e-8
 
 
 def _circular_mean(angles: list[float]) -> float:
@@ -254,6 +266,131 @@ def align_bench_calibration(
         offset=calibration.offset,
         matrix=mat_mul(rotation, calibration.matrix),
         field_strength=calibration.field_strength,
+    )
+
+
+def _dot(a: Vector3, b: Vector3) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _scaled(vector: Vector3, factor: float) -> Vector3:
+    return (vector[0] * factor, vector[1] * factor, vector[2] * factor)
+
+
+def _turned(rotation: Matrix, vector: Vector3) -> Vector3:
+    x, y, z = mat_vec(rotation, vector)
+    return (x, y, z)
+
+
+def _small_rotation(vector: Vector3) -> Matrix:
+    """Return the rotation about the axis of the vector by its length in rad."""
+    angle = norm(vector)
+    if angle == 0:
+        return identity(3)
+    x, y, z = _scaled(vector, 1 / angle)
+    c, s = math.cos(angle), math.sin(angle)
+    t = 1 - c
+    return [
+        [t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+        [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+        [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
+    ]
+
+
+@dataclass(frozen=True, kw_only=True)
+class ImuAlignmentResult:
+    #: rotation R with ``field in the IMU's axes = R @ calibrated field``
+    rotation: Matrix
+    #: angle of the earth's field below the horizon in rad, about 69° near Hamburg
+    inclination: float
+    #: root mean square deviation of that angle over the samples in rad
+    residual: float
+
+
+def fit_imu_alignment(
+    fields: list[Vector3],
+    downs: list[Vector3],
+) -> ImuAlignmentResult | None:
+    """
+    Find the small rotation from a calibrated magnetometer's axes to the IMU's.
+
+    The axis mappings in the config get both sensors into the unit's axes, but not
+    to the last degree: a chip can sit slightly tilted, and the bench fit of a
+    magnetometer whose sensing axes aren't exactly square (e.g. a leaning Z coil on
+    an RM3100) returns square axes turned by about half the error. Seen from the
+    compass, that looks like a tilt error, which near Hamburg is amplified 2.6 times
+    into the heading.
+
+    While the unit is turned on the bench, the angle between the earth's field and
+    gravity stays the same, whatever the orientation. So the rotation is the one that
+    makes ``(R @ field) · down`` constant over all samples. It is found by
+    Gauss-Newton steps on a linear least squares fit of a small rotation and that
+    constant.
+
+    :param fields: magnetometer fields after the bench calibration
+    :param downs: the direction down from the accelerometer at the same times, taken
+        only while the unit was held still
+    :return: the rotation, or None if there are too few samples or they don't cover
+        enough directions
+    """
+    pairs = [
+        (measured, down)
+        for measured, down in zip(fields, downs, strict=True)
+        if norm(measured) > 0 and norm(down) > 0
+    ]
+    if len(pairs) < MIN_BENCH_SAMPLES:
+        return None
+    unit_downs = [_scaled(down, 1 / norm(down)) for _, down in pairs]
+    strength = sum(norm(measured) for measured, _ in pairs) / len(pairs)
+
+    rotation = identity(3)
+    for _ in range(_ALIGNMENT_ITERATIONS):
+        rows: list[list[float]] = []
+        targets: list[float] = []
+        for (measured, _), down in zip(pairs, unit_downs, strict=True):
+            turned = _turned(rotation, measured)
+            # turning by a small angle vector d changes turned · down by
+            # d · (turned cross down)
+            gradient = cross(turned, down)
+            rows.append([*gradient, -1.0])
+            targets.append(-_dot(turned, down))
+        solution = least_squares(rows, targets)
+        if solution is None:
+            return None
+        step = (solution[0], solution[1], solution[2])
+        rotation = mat_mul(_small_rotation(step), rotation)
+        if norm(step) < _ALIGNMENT_TOLERANCE:
+            break
+
+    turned_fields = [_turned(rotation, measured) for measured, _ in pairs]
+
+    # the rotation is only determined if the gradients point in every direction
+    gradients = [
+        cross(turned, down)
+        for turned, down in zip(turned_fields, unit_downs, strict=True)
+    ]
+    mean = [sum(g[i] for g in gradients) / len(gradients) for i in range(3)]
+    spread = [
+        [
+            sum((g[i] - mean[i]) * (g[j] - mean[j]) for g in gradients) / len(gradients)
+            for j in range(3)
+        ]
+        for i in range(3)
+    ]
+    values, _ = symmetric_eigen(spread)
+    if min(values) < MIN_ALIGNMENT_SPREAD * strength * strength:
+        return None
+
+    angles = [
+        math.asin(max(-1.0, min(1.0, _dot(turned, down) / norm(turned))))
+        for turned, down in zip(turned_fields, unit_downs, strict=True)
+    ]
+    inclination = sum(angles) / len(angles)
+    residual = math.sqrt(sum((a - inclination) ** 2 for a in angles) / len(angles))
+    return ImuAlignmentResult(
+        rotation=rotation,
+        inclination=inclination,
+        residual=residual,
     )
 
 
