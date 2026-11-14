@@ -72,7 +72,12 @@ of the unit's forward direction, like the wind angle, so set
 - Bench calibration (`src/calibrate_compass.py`), once per finished unit before mounting
   it: run `python calibrate_compass.py --live 90` from `src` and turn the closed unit
   slowly in every direction. This removes the iron that travels with the sensors and
-  turns the second magnetometer into the axes of the first.
+  turns the second magnetometer into the axes of the first. With the IMU connected it
+  also learns the small angle between the magnetometers and the IMU, e.g. from a chip
+  that sits slightly crooked or the leaning Z coil of an RM3100, which would otherwise
+  show up as a tilt error. Pause for a moment in each position, the accelerometer is
+  only used while the unit is still. A recording works too:
+  `python calibrate_compass.py data_logs/magnetometer.log --imu data_logs/imu.log`.
 - Continuous calibration: the boat's own iron (engine, battery, fittings) is learned
   from the turns the boat makes anyway, nothing has to be turned by hand. About a third
   of a circle is enough for the hard iron, almost a full circle for the soft iron; one
