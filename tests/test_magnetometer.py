@@ -95,6 +95,7 @@ def _config(devices: list[str]) -> config.MagnetometerConfig:
         AXES=["x,-y,-z"] * len(devices),
         SAMPLE_RATE_HZ=20,
         DECLINATION_DEGREES=0,
+        BENCH_CALIBRATION_FILE="{sensor}.json",
     )
 
 
@@ -103,6 +104,14 @@ def test_unknown_devices_are_reported() -> None:
     reader = magnetometer.create_reader(_config(["mock", "mock"]))
     assert reader is not None
     assert len(reader.read_sample().magnetic_fields) == 2
+
+
+def test_channel_names_are_unique() -> None:
+    assert magnetometer.channel_names(["rm3100", "mmc5983ma", "mmc5983ma"]) == [
+        "rm3100",
+        "mmc5983ma",
+        "mmc5983ma_2",
+    ]
 
 
 def test_per_device_settings() -> None:
