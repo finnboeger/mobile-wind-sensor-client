@@ -31,7 +31,7 @@ from attitude import AttitudeEstimator
 from compass_calibration import BenchCalibration, bench_calibration_file
 from heading import HeadingFilter
 from motion import to_north_east
-from structs import HeadingData, ImuSample, MagnetometerSample, Vector3
+from structs import HeadingData, ImuSample, MagnetometerSample, PositionData, Vector3
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,8 @@ _T = TypeVar("_T")
 DEFAULT_MAGNETIC_SIGMA = math.radians(3.0)
 #: how long the worker waits for magnetometer samples before warning, in seconds
 _SAMPLE_TIMEOUT = 5.0
+#: GNSS speed and course are used for this long after a fix, in milliseconds
+_MAX_POSITION_AGE_MS = 3000
 
 
 def heading_from_field(field: Vector3, roll: float, pitch: float) -> float:
@@ -78,6 +80,87 @@ class MagnetometerChannel:
         return self.bench.apply(field)
 
 
+def world_to_unit(
+    vector: Vector3,
+    heading: float,
+    roll: float,
+    pitch: float,
+) -> Vector3:
+    """Rotate a vector from north, east, down into the unit's axes."""
+    north, east, down = vector
+    # heading about the vertical
+    x = north * math.cos(heading) + east * math.sin(heading)
+    y = -north * math.sin(heading) + east * math.cos(heading)
+    # pitch about y, then roll about x
+    x, z = (
+        x * math.cos(pitch) - down * math.sin(pitch),
+        x * math.sin(pitch) + down * math.cos(pitch),
+    )
+    y, z = (
+        y * math.cos(roll) + z * math.sin(roll),
+        -y * math.sin(roll) + z * math.cos(roll),
+    )
+    return (x, y, z)
+
+
+class TurnAcceleration:
+    """
+    Acceleration of the boat from its GNSS speed and the gyro.
+
+    In a turn the boat accelerates towards the inside of the turn by its speed times
+    the rate of turn: 0.2 g at 8 m/s and 15°/s. The accelerometer can't tell that
+    apart from a tilt, and its magnitude stays within a few percent of 1 g, so the
+    attitude estimator would take it for a roll of 12° and the heading would be off
+    by 2.6 times that. Removing it keeps the attitude right in turns.
+    """
+
+    def __init__(self) -> None:
+        self._time: int | None = None
+        self._speed = 0.0
+        self._course = 0.0
+        #: smoothed acceleration along the course in m/s²
+        self._along = 0.0
+
+    def add_position(self, position: PositionData) -> None:
+        # HNR-PVT repeats or interpolates the GNSS solution, see wind.py
+        if not position.valid or position.source not in (None, "NAV-PVT"):
+            return
+        if position.velocity_north is not None and position.velocity_east is not None:
+            course = math.atan2(position.velocity_east, position.velocity_north)
+        else:
+            course = math.radians(position.true_course)
+        if (
+            self._time is not None
+            and 0 < position.timestamp - self._time < _MAX_POSITION_AGE_MS
+        ):
+            dt = (position.timestamp - self._time) / 1000
+            # smooth over about a second, GNSS speed differences are noisy
+            self._along += min(1.0, dt) * (
+                (position.speed - self._speed) / dt - self._along
+            )
+        else:
+            self._along = 0.0
+        self._time = position.timestamp
+        self._speed = position.speed
+        self._course = course
+
+    def acceleration(self, timestamp: int, heading_rate: float) -> Vector3:
+        """
+        Return the boat's acceleration in north, east, down in m/s².
+
+        :param heading_rate: rate of turn in rad/s from the gyro
+        """
+        if self._time is None or abs(timestamp - self._time) > _MAX_POSITION_AGE_MS:
+            return (0.0, 0.0, 0.0)
+        across = self._speed * heading_rate
+        sin_course, cos_course = math.sin(self._course), math.cos(self._course)
+        return (
+            self._along * cos_course - across * sin_course,
+            self._along * sin_course + across * cos_course,
+            0.0,
+        )
+
+
 class CompassProcessor:
     """Turns IMU and magnetometer samples into a true heading."""
 
@@ -102,9 +185,28 @@ class CompassProcessor:
             compass_sigma=self.settings.magnetic_sigma,
             compass_lag=0.0,
         )
+        self.turn = TurnAcceleration()
+
+    def add_position(self, position: PositionData) -> None:
+        """Add a GNSS fix."""
+        self.turn.add_position(position)
+
+    def _boat_acceleration(self, sample: ImuSample) -> Vector3:
+        heading = self.heading.heading_at(sample.timestamp)
+        if heading is None or not self.attitude.initialized:
+            return (0.0, 0.0, 0.0)
+        return world_to_unit(
+            self.turn.acceleration(
+                sample.timestamp,
+                self.attitude.heading_rate(sample),
+            ),
+            heading,
+            self.attitude.roll,
+            self.attitude.pitch,
+        )
 
     def add_imu(self, sample: ImuSample) -> None:
-        self.attitude.update(sample)
+        self.attitude.update(sample, self._boat_acceleration(sample))
         if self.attitude.initialized:
             self.heading.predict(sample.timestamp, self.attitude.heading_rate(sample))
 
@@ -140,45 +242,55 @@ class CompassProcessor:
         self,
         imu_samples: list[ImuSample],
         magnetometer_samples: list[MagnetometerSample],
+        positions: list[PositionData] | None = None,
     ) -> list[HeadingData]:
         """
-        Add IMU and magnetometer samples in the order they were measured.
+        Add IMU and magnetometer samples and GNSS fixes in the order they were made.
 
         :return: the heading at the time of each magnetometer sample
         """
-        events: list[ImuSample | MagnetometerSample] = [
+        events: list[ImuSample | MagnetometerSample | PositionData] = [
             *imu_samples,
             *magnetometer_samples,
+            *(positions or []),
         ]
         headings: list[HeadingData] = []
         for event in sorted(events, key=lambda event: event.timestamp):
             if isinstance(event, ImuSample):
                 self.add_imu(event)
-                continue
-            heading = self.add_magnetometer(event)
-            if heading is not None:
-                headings.append(heading)
+            elif isinstance(event, PositionData):
+                self.add_position(event)
+            else:
+                heading = self.add_magnetometer(event)
+                if heading is not None:
+                    headings.append(heading)
         return headings
 
 
-def _drain(queue: Queue[list[_T]]) -> list[_T]:
+def _drain(queue: Queue[list[_T]] | Queue[_T]) -> list[_T]:
+    """Return everything waiting in a queue of items or of lists of items."""
     items: list[_T] = []
     while True:
         try:
-            items.extend(queue.get_nowait())
+            item = queue.get_nowait()
         except Empty:
             return items
+        if isinstance(item, list):
+            items.extend(item)
+        else:
+            items.append(item)
 
 
-def worker(
+def worker(  # noqa: PLR0913
     processor: CompassProcessor,
     imu_queue: Queue[list[ImuSample]],
     magnetometer_queue: Queue[list[MagnetometerSample]],
     output_queues: list[Queue[HeadingData]],
+    position_queue: Queue[PositionData] | None = None,
     stop: threading.Event | None = None,
 ) -> None:
     """
-    Turn the IMU and magnetometer batches into headings.
+    Turn the IMU and magnetometer batches and the GNSS fixes into headings.
 
     :param output_queues: queues receiving the headings, like the compass headings
         received over NMEA 2000
@@ -193,7 +305,14 @@ def worker(
         magnetometer_samples += _drain(magnetometer_queue)
         # the IMU batches arrive independently, so the latest IMU samples may lag the
         # magnetometer by up to a batch; the heading filter extrapolates over that
-        for heading in processor.add(_drain(imu_queue), magnetometer_samples):
+        positions: list[PositionData] = (
+            [] if position_queue is None else _drain(position_queue)
+        )
+        for heading in processor.add(
+            _drain(imu_queue),
+            magnetometer_samples,
+            positions,
+        ):
             log.data("heading", heading)
             for queue in output_queues:
                 queue.put(heading)
@@ -217,10 +336,17 @@ def init(
     imu_queue: Queue[list[ImuSample]],
     magnetometer_queue: Queue[list[MagnetometerSample]],
     output_queues: list[Queue[HeadingData]],
+    position_queue: Queue[PositionData],
 ) -> None:
     """Start turning the IMU and magnetometer samples into headings."""
     threading.Thread(
         target=worker,
-        args=(create_processor(), imu_queue, magnetometer_queue, output_queues),
+        args=(
+            create_processor(),
+            imu_queue,
+            magnetometer_queue,
+            output_queues,
+            position_queue,
+        ),
         daemon=True,
     ).start()

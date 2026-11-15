@@ -12,10 +12,11 @@ import calibrate_compass
 import compass
 import compass_calibration
 from log import DATA_SEPARATOR
-from structs import HeadingData, ImuSample, MagnetometerSample, Vector3
+from structs import HeadingData, ImuSample, MagnetometerSample, PositionData, Vector3
 from tests.simulation import (
     EARTH_FIELD,
     Magnetometer,
+    RibCourse,
     rotate,
     simulate,
     world_to_unit,
@@ -40,14 +41,15 @@ def test_heading_from_a_tilted_field(heading: float, pitch: float, roll: float) 
     assert abs(math.degrees(wrap(measured - math.radians(heading)))) < 1e-6
 
 
-def _errors(
+def _errors(  # noqa: PLR0913
     processor: compass.CompassProcessor,
     imu_samples: list[ImuSample],
     magnetometer_samples: list[MagnetometerSample],
     truth: Callable[[float], float],
     after: float,
+    positions: list[PositionData] | None = None,
 ) -> list[float]:
-    headings = processor.add(imu_samples, magnetometer_samples)
+    headings = processor.add(imu_samples, magnetometer_samples, positions)
     return [
         math.degrees(wrap(h.heading - truth(h.timestamp / 1000)))
         for h in headings
@@ -218,3 +220,36 @@ def test_calibration_tool_reads_the_data_log(tmp_path: Path) -> None:
     fields = calibrate_compass.read_log([path], 2)
     assert len(fields) == 2
     assert fields[1] == [sample.magnetic_fields[1] for sample in samples]
+
+
+def test_world_to_unit_rotation() -> None:
+    for heading, pitch, roll in _random_orientations(20, 3):
+        vector = (1.0, -2.0, 3.0)
+        expected = rotate(world_to_unit(heading, pitch, roll), vector)
+        found = compass.world_to_unit(vector, heading, roll, pitch)
+        assert all(abs(a - b) < 1e-9 for a, b in zip(found, expected, strict=True))
+
+
+def _rib_errors(course: RibCourse, *, use_gnss: bool) -> list[float]:
+    imu_samples, magnetometer_samples = simulate(
+        course.attitude,
+        course.duration,
+        boat_acceleration=course.acceleration,
+    )
+    return _errors(
+        compass.CompassProcessor({"mock": None}),
+        imu_samples,
+        magnetometer_samples,
+        course.heading,
+        after=5,
+        positions=course.positions() if use_gnss else None,
+    )
+
+
+def test_gnss_speed_removes_the_turn_from_the_attitude() -> None:
+    course = RibCourse(targets=[0, 180, 0, 120], straight_time=30)
+    with_gnss = _rib_errors(course, use_gnss=True)
+    without_gnss = _rib_errors(course, use_gnss=False)
+    # each turn tilts the attitude towards the outside, 2.6 times that in the heading
+    assert max(abs(e) for e in without_gnss) > 5
+    assert max(abs(e) for e in with_gnss) < 1.5

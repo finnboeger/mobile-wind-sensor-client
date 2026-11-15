@@ -106,9 +106,23 @@ class AttitudeEstimator:
             return 0.0
         return (q * math.sin(roll) + r * math.cos(roll)) / cos_pitch
 
-    def update(self, sample: ImuSample) -> None:
-        """Add an IMU sample."""
-        acceleration = sample.acceleration
+    def update(
+        self,
+        sample: ImuSample,
+        boat_acceleration: Vector3 = (0.0, 0.0, 0.0),
+    ) -> None:
+        """
+        Add an IMU sample.
+
+        :param boat_acceleration: known acceleration of the unit in its own axes in
+            m/s², e.g. the centripetal acceleration in a turn, removed from the
+            accelerometer reading
+        """
+        acceleration = (
+            sample.acceleration[0] - boat_acceleration[0],
+            sample.acceleration[1] - boat_acceleration[1],
+            sample.acceleration[2] - boat_acceleration[2],
+        )
         acceleration_norm = _norm(acceleration)
 
         if self.down is None or self._time is None:

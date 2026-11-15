@@ -11,7 +11,7 @@ import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from structs import ImuSample, MagnetometerSample, Vector3
+from structs import ImuSample, MagnetometerSample, PositionData, Vector3
 
 GRAVITY = 9.80665
 #: earth's field near Hamburg in µT, north, east, down
@@ -156,3 +156,105 @@ def simulate(  # noqa: PLR0913
 
 def wrap(angle: float) -> float:
     return (angle + math.pi) % math.tau - math.pi
+
+
+@dataclass(kw_only=True)
+class RibCourse:
+    """
+    A RIB going straight on a number of headings, with turns in between.
+
+    It rolls and pitches in a short sea and drifts in a current. Headings are in
+    degrees, times in seconds.
+    """
+
+    targets: list[float]
+    start_heading: float = 0.0
+    straight_time: float = 40.0
+    turn_rate: float = math.radians(15)
+    speed: float = 8.0
+    #: current in m/s, north and east
+    current: tuple[float, float] = (0.0, 0.0)
+    roll_amplitude: float = math.radians(6)
+    pitch_amplitude: float = math.radians(4)
+    #: (start time, start heading in rad, heading rate in rad/s, end time)
+    segments: list[tuple[float, float, float, float]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        time, heading = 0.0, math.radians(self.start_heading)
+        for target in self.targets:
+            turn = wrap(math.radians(target) - heading)
+            turn_time = abs(turn) / self.turn_rate
+            rate = math.copysign(self.turn_rate, turn)
+            self.segments.append((time, heading, rate, time + turn_time))
+            time += turn_time
+            heading = math.radians(target)
+            self.segments.append((time, heading, 0.0, time + self.straight_time))
+            time += self.straight_time
+
+    @property
+    def duration(self) -> float:
+        return self.segments[-1][3]
+
+    def _segment(self, time: float) -> tuple[float, float, float, float]:
+        for segment in self.segments:
+            if time < segment[3]:
+                return segment
+        return self.segments[-1]
+
+    def heading(self, time: float) -> float:
+        start, heading, rate, _ = self._segment(time)
+        return (heading + rate * (time - start)) % math.tau
+
+    def heading_rate(self, time: float) -> float:
+        return self._segment(time)[2]
+
+    def attitude(self, time: float) -> tuple[float, float, float]:
+        return (
+            self.heading(time),
+            self.pitch_amplitude * math.sin(math.tau * time / 2.3 + 1),
+            self.roll_amplitude * math.sin(math.tau * time / 3.1),
+        )
+
+    def velocity(self, time: float) -> tuple[float, float]:
+        """Velocity over ground in m/s, north and east."""
+        heading = self.heading(time)
+        return (
+            self.speed * math.cos(heading) + self.current[0],
+            self.speed * math.sin(heading) + self.current[1],
+        )
+
+    def acceleration(self, time: float) -> Vector3:
+        """Acceleration in north, east, down: the turn and the waves."""
+        heading = self.heading(time)
+        centripetal = self.speed * self.heading_rate(time)
+        heave = 1.5 * math.sin(math.tau * time / 2.3)
+        surge = 0.5 * math.sin(math.tau * time / 1.7)
+        return (
+            -centripetal * math.sin(heading) + surge * math.cos(heading),
+            centripetal * math.cos(heading) + surge * math.sin(heading),
+            heave,
+        )
+
+    def positions(self, rate: float = 2.0) -> list[PositionData]:
+        """GNSS fixes along the course."""
+        fixes: list[PositionData] = []
+        for index in range(int(self.duration * rate)):
+            time = index / rate
+            north, east = self.velocity(time)
+            fixes.append(
+                PositionData(
+                    timestamp=round(time * 1000),
+                    valid=True,
+                    latitude=53.5,
+                    longitude=10.0,
+                    altitude=0.0,
+                    geoidal_separation=0.0,
+                    speed=math.hypot(north, east),
+                    true_course=math.degrees(math.atan2(east, north)) % 360,
+                    velocity_north=north,
+                    velocity_east=east,
+                    speed_accuracy=0.1,
+                    source="NAV-PVT",
+                ),
+            )
+        return fixes
