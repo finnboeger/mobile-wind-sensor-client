@@ -26,7 +26,9 @@ from typing import TypeVar
 
 import config
 import log
+import magnetometer
 from attitude import AttitudeEstimator
+from compass_calibration import BenchCalibration, bench_calibration_file
 from heading import HeadingFilter
 from motion import to_north_east
 from structs import HeadingData, ImuSample, MagnetometerSample, Vector3
@@ -67,16 +69,13 @@ class CompassSettings:
 class MagnetometerChannel:
     """Correction of one magnetometer's readings."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, bench: BenchCalibration | None = None) -> None:
         self.name = name
+        self.bench = bench or BenchCalibration()
 
     def correct(self, field: Vector3) -> Vector3:
-        """
-        Return the field with the iron around the sensor removed.
-
-        Not calibrated yet, the raw field is used as it is.
-        """
-        return field
+        """Return the field with the iron in the unit removed."""
+        return self.bench.apply(field)
 
 
 class CompassProcessor:
@@ -84,18 +83,20 @@ class CompassProcessor:
 
     def __init__(
         self,
-        names: list[str],
+        magnetometers: dict[str, BenchCalibration | None],
         settings: CompassSettings | None = None,
     ) -> None:
         """
         Create a processor.
 
-        :param names: names of the magnetometers, in the order of
-            :py:attr:`structs.MagnetometerSample.magnetic_fields`
+        :param magnetometers: name and bench calibration of each magnetometer, in
+            the order of :py:attr:`structs.MagnetometerSample.magnetic_fields`
         :param settings: settings, or None for the defaults
         """
         self.settings = settings or CompassSettings()
-        self.channels = [MagnetometerChannel(name) for name in names]
+        self.channels = [
+            MagnetometerChannel(name, bench) for name, bench in magnetometers.items()
+        ]
         self.attitude = AttitudeEstimator()
         self.heading = HeadingFilter(
             compass_sigma=self.settings.magnetic_sigma,
@@ -200,8 +201,12 @@ def worker(
 
 def create_processor() -> CompassProcessor:
     magnetometer_config = config.Config().MAGNETOMETER
+    pattern = magnetometer_config.BENCH_CALIBRATION_FILE
     return CompassProcessor(
-        magnetometer_config.DEVICES,
+        {
+            name: BenchCalibration.load(bench_calibration_file(pattern, name))
+            for name in magnetometer.channel_names(magnetometer_config.DEVICES)
+        },
         CompassSettings(
             declination=math.radians(magnetometer_config.DECLINATION_DEGREES),
         ),
