@@ -101,6 +101,7 @@ def _config(devices: list[str]) -> config.MagnetometerConfig:
         GNSS_ALIGNMENT=True,
         BOW_ANGLE_DEGREES=0,
         DRIFT_TRACKING=True,
+        SEND_HEADING=True,
     )
 
 
