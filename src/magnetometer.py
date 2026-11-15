@@ -16,8 +16,12 @@ from dataclasses import dataclass
 from queue import Queue
 from typing import Protocol
 
+from smbus2 import SMBus
+
 import config
 import log
+import mmc5983ma
+import rm3100
 from imu import parse_axes
 from structs import MagnetometerSample, Vector3
 
@@ -47,6 +51,14 @@ class MockMagnetometer:
 #: available devices by their name in the config, created from the I2C bus number
 #: and the address (None for the chip's default)
 DEVICES: dict[str, Callable[[int, int | None], MagnetometerDevice]] = {
+    "mmc5983ma": lambda bus, address: mmc5983ma.MMC5983MA(
+        SMBus(bus),
+        mmc5983ma.DEFAULT_ADDRESS if address is None else address,
+    ),
+    "rm3100": lambda bus, address: rm3100.RM3100(
+        SMBus(bus),
+        rm3100.DEFAULT_ADDRESS if address is None else address,
+    ),
     "mock": lambda _bus, _address: MockMagnetometer(),
 }
 
