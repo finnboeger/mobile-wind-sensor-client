@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 from queue import Queue
+from typing import Any
 
 import jsonpickle
 import pytest
@@ -420,3 +421,45 @@ def test_bow_angle_is_taken_into_account() -> None:
     processor.add(imu_samples, magnetometer_samples, course.positions())
     assert processor.alignment.offset is not None
     assert abs(math.degrees(processor.alignment.offset)) < 1
+
+
+def _current_near_second_sensor(time: float) -> Vector3:
+    """A current near the second sensor adds 6 µT sideways for 30 s, near the end."""
+    if RIB.duration - 100 <= time < RIB.duration - 70:
+        return (0.0, 6.0, 0.0)
+    return (0.0, 0.0, 0.0)
+
+
+def _boat_iron(hard_iron: Vector3, **kwargs: Any) -> Magnetometer:  # noqa: ANN401
+    return Magnetometer(
+        hard_iron=hard_iron,
+        soft_iron=BOAT_IRON.soft_iron,
+        noise=BOAT_IRON.noise,
+        **kwargs,
+    )
+
+
+def test_second_magnetometer_catches_a_local_disturbance() -> None:
+    first = _boat_iron((6.0, -4.0, 2.0))
+    second = _boat_iron((-3.0, 5.0, -1.0), disturbance=_current_near_second_sensor)
+    processor = compass.CompassProcessor({"first": None, "second": None})
+    errors = _run_rib(processor, [first, second])
+    assert all(channel.calibration.converged for channel in processor.channels)
+    assert _rms(errors) < 2
+    assert max(abs(e) for e in errors) < 4
+
+    # with only the disturbed sensor the heading is pulled off by about 20°
+    single = _run_rib(compass.CompassProcessor({"second": None}), [second])
+    assert max(abs(e) for e in single) > 10
+
+
+def test_field_strength_check() -> None:
+    channel = compass.MagnetometerChannel("sensor")
+    assert channel.field_ok(0, (50.0, 0.0, 0.0))
+    assert channel.field_ok(100, (52.0, 0.0, 0.0))
+    # a magnet nearby
+    assert not channel.field_ok(200, (70.0, 0.0, 0.0))
+    # still there after a minute: the new normal
+    assert not channel.field_ok(30_000, (70.0, 0.0, 0.0))
+    assert not channel.field_ok(61_000, (70.0, 0.0, 0.0))
+    assert channel.field_ok(61_100, (70.0, 0.0, 0.0))
