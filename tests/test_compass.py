@@ -296,12 +296,14 @@ def _run_rib(
     processor: compass.CompassProcessor,
     magnetometers: list[Magnetometer],
     course: RibCourse = RIB,
+    earth_field: Vector3 = EARTH_FIELD,
 ) -> list[float]:
     """Return the heading errors in degrees in the last two minutes."""
     imu_samples, magnetometer_samples = simulate(
         course.attitude,
         course.duration,
         magnetometers=magnetometers,
+        earth_field=earth_field,
         boat_acceleration=course.acceleration,
         gyro_bias=(math.radians(0.2), math.radians(-0.1), math.radians(0.3)),
     )
@@ -351,3 +353,70 @@ def test_calibration_state_round_trip(tmp_path: Path) -> None:
     )
     # a missing file starts a new calibration
     compass.CompassProcessor({"sensor": None}).load(tmp_path / "missing.json")
+
+
+def test_gnss_alignment_cancels_current() -> None:
+    alignment = compass_calibration.GnssAlignment()
+    true_offset = math.radians(4)
+    speed = 4.0
+    current = (0.0, 0.8)  # 0.8 m/s towards east
+    for heading_deg in range(0, 360, 2):
+        heading = math.radians(heading_deg)
+        for _ in range(20):
+            course = heading + true_offset
+            velocity_north = speed * math.cos(course) + current[0]
+            velocity_east = speed * math.sin(course) + current[1]
+            alignment.add_sample(heading, math.atan2(velocity_east, velocity_north))
+    assert alignment.offset is not None
+    # the current alone shifts single headings by up to 11°
+    assert abs(math.degrees(alignment.offset - true_offset)) < 0.5
+
+
+def _declined_field(declination: float) -> Vector3:
+    horizontal, _, down = EARTH_FIELD
+    return (
+        horizontal * math.cos(math.radians(declination)),
+        horizontal * math.sin(math.radians(declination)),
+        down,
+    )
+
+
+def test_gnss_alignment_corrects_a_wrong_declination() -> None:
+    # magnetic north is 4° east, the setting says 1°
+    processor = compass.CompassProcessor(
+        {"sensor": None},
+        compass.CompassSettings(declination=math.radians(1)),
+    )
+    errors = _run_rib(processor, [BOAT_IRON], earth_field=_declined_field(4))
+    assert processor.alignment.offset is not None
+    assert abs(math.degrees(processor.alignment.offset) - 3) < 1
+    assert _rms(errors) < 2
+
+    unaligned = compass.CompassProcessor(
+        {"sensor": None},
+        compass.CompassSettings(declination=math.radians(1), gnss_alignment=False),
+    )
+    errors = _run_rib(unaligned, [BOAT_IRON], earth_field=_declined_field(4))
+    assert abs(sum(errors) / len(errors) + 3) < 1
+
+
+def test_bow_angle_is_taken_into_account() -> None:
+    # the unit's forward points 30° to the right of the bow, so the boat moves 30°
+    # to the left of where the unit points
+    course = RibCourse(targets=RIB.targets, current=(0.3, -0.4))
+    processor = compass.CompassProcessor(
+        {"sensor": None},
+        compass.CompassSettings(bow_angle=math.radians(-30)),
+    )
+    imu_samples, magnetometer_samples = simulate(
+        lambda time: (
+            (course.heading(time) + math.radians(30)) % math.tau,
+            *course.attitude(time)[1:],
+        ),
+        course.duration,
+        magnetometers=[BOAT_IRON],
+        boat_acceleration=course.acceleration,
+    )
+    processor.add(imu_samples, magnetometer_samples, course.positions())
+    assert processor.alignment.offset is not None
+    assert abs(math.degrees(processor.alignment.offset)) < 1
