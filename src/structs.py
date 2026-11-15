@@ -62,6 +62,18 @@ class HeadingData:
 
 
 @dataclass(frozen=True, kw_only=True)
+class VelocityData:
+    """Filtered velocity over ground at the time of a wind measurement."""
+
+    #: North component of the velocity in m/s
+    velocity_north: float
+    #: East component of the velocity in m/s
+    velocity_east: float
+    #: timestamp the velocity was evaluated at, in milliseconds
+    timestamp: int
+
+
+@dataclass(frozen=True, kw_only=True)
 class WindData:
     """Data class for wind data."""
 
