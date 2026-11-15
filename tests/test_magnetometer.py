@@ -94,6 +94,7 @@ def _config(devices: list[str]) -> config.MagnetometerConfig:
         ADDRESSES=[None] * len(devices),
         AXES=["x,-y,-z"] * len(devices),
         SAMPLE_RATE_HZ=20,
+        DECLINATION_DEGREES=0,
     )
 
 
