@@ -573,3 +573,110 @@ def test_drift_tracker_ignores_a_short_disturbance() -> None:
     for second in range(630, 1300):
         tracker.add(second * 1000, (1.0, 8.0, 0.0))
     assert math.dist(tracker.offset, (1.0, 8.0, 0.0)) < 0.5
+
+
+#: an RM3100 whose Z coil leans 2.5° towards X: its Z reading picks up part of X
+LEAN = math.radians(2.5)
+LEANING_COIL = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [math.sin(LEAN), 0.0, math.cos(LEAN)]]
+
+
+def _leaning_coil_tumble(
+    seed: int = 4,
+) -> tuple[Magnetometer, list[Vector3], list[Vector3]]:
+    """Return the sensor, its readings and the direction down while it is turned."""
+    sensor = Magnetometer(hard_iron=HARD_IRON, soft_iron=LEANING_COIL, noise=0.05)
+    rng = random.Random(seed)
+    fields: list[Vector3] = []
+    downs: list[Vector3] = []
+    for orientation in _random_orientations(400, seed):
+        to_unit = world_to_unit(*orientation)
+        fields.append(sensor.measure(rotate(to_unit, EARTH_FIELD), 0, rng))
+        downs.append(rotate(to_unit, (0.0, 0.0, 1.0)))
+    return sensor, fields, downs
+
+
+def _largest_heading_error(
+    sensor: Magnetometer,
+    calibration: compass_calibration.BenchCalibration,
+) -> float:
+    errors = []
+    for heading, steep_pitch, any_roll in _random_orientations(100, 9):
+        pitch, roll = steep_pitch / 3, any_roll / 6
+        raw = sensor.measure(
+            rotate(world_to_unit(heading, pitch, roll), EARTH_FIELD),
+            0,
+            random.Random(0),
+        )
+        measured = compass.heading_from_field(calibration.apply(raw), roll, pitch)
+        errors.append(abs(math.degrees(wrap(measured - heading))))
+    return max(errors)
+
+
+def test_imu_alignment_removes_the_tilt_of_a_leaning_coil() -> None:
+    sensor, fields, downs = _leaning_coil_tumble()
+    fit = compass_calibration.fit_ellipsoid(fields)
+    assert fit is not None
+    calibration = fit.calibration
+
+    alignment = compass_calibration.fit_imu_alignment(
+        [calibration.apply(f) for f in fields],
+        downs,
+    )
+    assert alignment is not None
+    aligned = compass_calibration.align_bench_calibration(
+        calibration,
+        alignment.rotation,
+    )
+    # the field dips 69° near Hamburg
+    inclination = math.degrees(math.atan2(EARTH_FIELD[2], EARTH_FIELD[0]))
+    assert abs(math.degrees(alignment.inclination) - inclination) < 0.2
+
+    # the square axes of the bench fit sit about half the lean off the board's
+    assert _largest_heading_error(sensor, calibration) > 1.5
+    assert _largest_heading_error(sensor, aligned) < 0.4
+
+
+def test_imu_alignment_needs_turns_in_every_direction() -> None:
+    _, fields, downs = _leaning_coil_tumble()
+    # always the same side down: the rotation about the vertical can't be seen
+    level = [(0.0, 0.0, 1.0)] * len(fields)
+    assert compass_calibration.fit_imu_alignment(fields, level) is None
+    assert compass_calibration.fit_imu_alignment(fields[:10], downs[:10]) is None
+
+
+def test_calibration_tool_aligns_with_the_imu_log(tmp_path: Path) -> None:
+    sensor, fields, downs = _leaning_coil_tumble()
+    magnetometer_samples = [
+        MagnetometerSample(timestamp=1000 + 50 * i, magnetic_fields=(field,))
+        for i, field in enumerate(fields)
+    ]
+    # the IMU runs at its own rate; every other position the unit is still moving
+    imu_samples = [
+        ImuSample(
+            timestamp=1000 + 50 * i + 7,
+            acceleration=tuple(-9.80665 * d for d in down),  # type: ignore[arg-type]
+            angular_rate=(0.0, 0.0, 0.0 if i % 2 else 1.0),
+        )
+        for i, down in enumerate(downs)
+    ]
+    magnetometer_log = tmp_path / "magnetometer.log"
+    imu_log = tmp_path / "imu.log"
+    magnetometer_log.write_text(
+        f"1.0{DATA_SEPARATOR}{jsonpickle.encode(magnetometer_samples)}\n",
+        encoding="utf-8",
+    )
+    imu_log.write_text(
+        f"1.0{DATA_SEPARATOR}{jsonpickle.encode(imu_samples)}\n",
+        encoding="utf-8",
+    )
+
+    samples, times = calibrate_compass.read_log_with_times([magnetometer_log], 1)
+    matched = calibrate_compass.match_downs(
+        times,
+        calibrate_compass.read_imu_log([imu_log]),
+    )
+    assert sum(d is not None for d in matched) == len(fields) // 2
+
+    (calibration,) = calibrate_compass.calibrate_all(["rm3100"], samples, matched)
+    assert calibration is not None
+    assert _largest_heading_error(sensor, calibration) < 0.4
