@@ -152,6 +152,8 @@ class MagnetometerConfig:
     GNSS_ALIGNMENT: bool
     #: angle from the unit's forward direction to the bow in degrees, clockwise
     BOW_ANGLE_DEGREES: float
+    #: follow the drift of further magnetometers relative to the first one
+    DRIFT_TRACKING: bool
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -495,6 +497,13 @@ class Config:
                 "BOW_ANGLE_DEGREES",
                 float,
                 0.0,
+            ),
+            DRIFT_TRACKING=get(
+                config,
+                "MAGNETOMETER",
+                "DRIFT_TRACKING",
+                parse_bool,
+                True,
             ),
         )
 

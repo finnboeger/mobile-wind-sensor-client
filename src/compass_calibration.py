@@ -10,7 +10,8 @@ measured once on the bench: turn the finished unit in every direction and fit an
 ellipsoid to the readings. The correction maps that ellipsoid back to a sphere. With
 more than one magnetometer the same rotation also gives the small angles between
 the chips on the board, so every magnetometer's field can be turned into the axes of
-the first one (:py:func:`fit_rotation`). See ``calibrate_compass.py``.
+the first one (:py:func:`fit_rotation`), and :py:class:`DriftTracker` can follow
+how the others drift relative to it. See ``calibrate_compass.py``.
 
 The boat's iron (engine, battery, fuel tank, fittings) turns with the sensor only
 when the whole boat turns, so it can't be removed on the bench.
@@ -254,6 +255,85 @@ def align_bench_calibration(
         matrix=mat_mul(rotation, calibration.matrix),
         field_strength=calibration.field_strength,
     )
+
+
+#: time constant in seconds of the drift tracking
+DRIFT_TIME_CONSTANT = 60.0
+#: differences further than this from the learned drift, in µT, are a disturbance
+#: near one of the magnetometers rather than drift, and are not used
+DRIFT_TOLERANCE = 3.0
+#: if the difference stays outside the tolerance for this long, it is accepted as
+#: the new drift, in milliseconds
+DRIFT_RESET_AFTER_MS = 600_000
+
+
+class DriftTracker:
+    """
+    Learns how a magnetometer's offset drifts relative to a reference magnetometer.
+
+    Two magnetometers on the same board, both bench calibrated into the same axes,
+    measure the same field: the earth's, plus the boat's iron, which is far enough
+    away to be the same at both. Whatever differs between them comes from the
+    sensors themselves. A MEMS sensor's offset changes with temperature and after
+    a strong field has magnetised it, while the RM3100 has no offset to drift. So
+    the slowly changing part of the difference is the MEMS sensor's drift.
+
+    Unlike the continuous calibration this also works on a long straight run, and
+    it includes the vertical part of the offset, which the horizontal fit can't see.
+    """
+
+    def __init__(self) -> None:
+        #: drift of the offset in µT in the unit's axes
+        self.offset: Vector3 = (0.0, 0.0, 0.0)
+        self._weight = 0.0
+        self._time: int | None = None
+        self._rejected_since: int | None = None
+
+    def remove(self, field: Vector3) -> Vector3:
+        return (
+            field[0] - self.offset[0],
+            field[1] - self.offset[1],
+            field[2] - self.offset[2],
+        )
+
+    def add(self, timestamp: int, difference: Vector3) -> None:
+        """
+        Add the difference of the two magnetometers' fields.
+
+        :param difference: this magnetometer's field minus the reference's, both
+            bench calibrated, in µT
+        """
+        dt = 0.0 if self._time is None else max(0, timestamp - self._time) / 1000
+        self._time = timestamp
+        if self._weight > 0 and math.dist(difference, self.offset) > DRIFT_TOLERANCE:
+            if self._rejected_since is None:
+                self._rejected_since = timestamp
+            elif timestamp - self._rejected_since > DRIFT_RESET_AFTER_MS:
+                logger.warning(
+                    "Magnetometer drift jumped from %s to %s µT",
+                    ", ".join(f"{x:.1f}" for x in self.offset),
+                    ", ".join(f"{x:.1f}" for x in difference),
+                )
+                self.offset = difference
+                self._rejected_since = None
+            return
+        self._rejected_since = None
+        # a plain average until a time constant's worth of samples is in
+        self._weight += 1
+        gain = max(dt / DRIFT_TIME_CONSTANT, 1 / self._weight)
+        x, y, z = (
+            self.offset[i] + min(1.0, gain) * (difference[i] - self.offset[i])
+            for i in range(3)
+        )
+        self.offset = (x, y, z)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {"offset": list(self.offset), "weight": self._weight}
+
+    def load_state_dict(self, state: dict[str, Any]) -> None:
+        offset = state["offset"]
+        self.offset = (float(offset[0]), float(offset[1]), float(offset[2]))
+        self._weight = float(state.get("weight", 0.0))
 
 
 #: number of bins the horizontal field direction is sorted into

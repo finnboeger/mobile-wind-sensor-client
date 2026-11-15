@@ -100,6 +100,7 @@ def _config(devices: list[str]) -> config.MagnetometerConfig:
         CALIBRATION_FILE="compass.json",
         GNSS_ALIGNMENT=True,
         BOW_ANGLE_DEGREES=0,
+        DRIFT_TRACKING=True,
     )
 
 

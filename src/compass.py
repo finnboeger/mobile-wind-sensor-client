@@ -34,6 +34,7 @@ from attitude import AttitudeEstimator
 from compass_calibration import (
     BenchCalibration,
     ContinuousCalibration,
+    DriftTracker,
     GnssAlignment,
     HorizontalCalibration,
     bench_calibration_file,
@@ -123,6 +124,8 @@ class CompassSettings:
     min_alignment_speed: float = 3.0
     #: maximum rate of turn in rad/s for the GNSS alignment
     max_alignment_rate: float = math.radians(3)
+    #: follow the drift of further magnetometers relative to the first one
+    drift_tracking: bool = True
 
 
 class MagnetometerChannel:
@@ -132,14 +135,16 @@ class MagnetometerChannel:
         self.name = name
         self.bench = bench or BenchCalibration()
         self.calibration = ContinuousCalibration()
+        #: drift relative to the first magnetometer, unused for the first one
+        self.drift = DriftTracker()
         #: expected strength of the earth's field after the bench calibration in µT
         self.field_strength: float | None = self.bench.field_strength
         self._field_rejected_since: int | None = None
         self._time: int | None = None
 
     def correct(self, field: Vector3) -> Vector3:
-        """Return the field with the iron in the unit removed."""
-        return self.bench.apply(field)
+        """Return the field with the iron in the unit and the sensor's drift removed."""
+        return self.drift.remove(self.bench.apply(field))
 
     def field_ok(self, timestamp: int, field: Vector3) -> bool:
         """
@@ -194,6 +199,7 @@ class MagnetometerChannel:
             "name": self.name,
             "field_strength": self.field_strength,
             "calibration": self.calibration.state_dict(),
+            "drift": self.drift.state_dict(),
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -201,6 +207,8 @@ class MagnetometerChannel:
             self.field_strength = float(state["field_strength"])
         if "calibration" in state:
             self.calibration.load_state_dict(state["calibration"])
+        if "drift" in state:
+            self.drift.load_state_dict(state["drift"])
 
 
 def world_to_unit(
@@ -423,14 +431,31 @@ class CompassProcessor:
         roll, pitch = self.attitude.roll, self.attitude.pitch
         calibration_sample_ok = self._calibration_sample_ok()
         headings: list[tuple[MagnetometerChannel, float]] = []
+        reference: Vector3 | None = None
         for channel, raw in zip(self.channels, sample.magnetic_fields, strict=False):
             field = channel.correct(raw)
             if not channel.field_ok(sample.timestamp, field):
                 continue
+            if channel is self.channels[0]:
+                reference = field
+            elif reference is not None and self._track_drift():
+                bench = channel.bench.apply(raw)
+                channel.drift.add(
+                    sample.timestamp,
+                    (
+                        bench[0] - reference[0],
+                        bench[1] - reference[1],
+                        bench[2] - reference[2],
+                    ),
+                )
             if calibration_sample_ok:
                 channel.add_calibration_sample(field, roll, pitch)
             headings.append((channel, channel.heading(field, roll, pitch)))
         return self._combine(sample.timestamp, headings)
+
+    def _track_drift(self) -> bool:
+        # while the magnetometers disagree one of them is disturbed, which isn't drift
+        return self.settings.drift_tracking and self._disagreeing_since is None
 
     def _combine(
         self,
@@ -636,6 +661,7 @@ def create_processor() -> CompassProcessor:
             continuous_calibration=magnetometer_config.CONTINUOUS_CALIBRATION,
             gnss_alignment=magnetometer_config.GNSS_ALIGNMENT,
             bow_angle=math.radians(magnetometer_config.BOW_ANGLE_DEGREES),
+            drift_tracking=magnetometer_config.DRIFT_TRACKING,
         ),
     )
     processor.load(magnetometer_config.CALIBRATION_FILE)
