@@ -96,6 +96,8 @@ def _config(devices: list[str]) -> config.MagnetometerConfig:
         SAMPLE_RATE_HZ=20,
         DECLINATION_DEGREES=0,
         BENCH_CALIBRATION_FILE="{sensor}.json",
+        CONTINUOUS_CALIBRATION=True,
+        CALIBRATION_FILE="compass.json",
     )
 
 
