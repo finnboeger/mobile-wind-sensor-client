@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import threading
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
@@ -33,6 +34,7 @@ from attitude import AttitudeEstimator
 from compass_calibration import (
     BenchCalibration,
     ContinuousCalibration,
+    GnssAlignment,
     HorizontalCalibration,
     bench_calibration_file,
     write_json_atomically,
@@ -51,6 +53,12 @@ DEFAULT_MAGNETIC_SIGMA = math.radians(3.0)
 _SAMPLE_TIMEOUT = 5.0
 #: GNSS speed and course are used for this long after a fix, in milliseconds
 _MAX_POSITION_AGE_MS = 3000
+#: how long the heading history for the GNSS alignment reaches back, in ms
+_HEADING_HISTORY_MS = 5000
+#: the heading for a GNSS fix must have been recorded this close to it, in ms
+_MAX_HEADING_TIME_OFFSET_MS = 250
+#: the boat must have gone straight for this long before a fix is used, in ms
+_STRAIGHT_FOR_MS = 3000
 
 
 def heading_from_field(
@@ -93,6 +101,14 @@ class CompassSettings:
     max_calibration_rate: float = math.radians(45)
     #: time between calibration fits in milliseconds
     refit_interval_ms: int = 30_000
+    #: learn the heading offset from the course over ground
+    gnss_alignment: bool = True
+    #: angle from the unit's forward direction to the bow in rad, clockwise
+    bow_angle: float = 0.0
+    #: minimum speed over ground in m/s for the GNSS alignment
+    min_alignment_speed: float = 3.0
+    #: maximum rate of turn in rad/s for the GNSS alignment
+    max_alignment_rate: float = math.radians(3)
 
 
 class MagnetometerChannel:
@@ -234,6 +250,11 @@ class CompassProcessor:
             compass_lag=0.0,
         )
         self.turn = TurnAcceleration()
+        self.alignment = GnssAlignment()
+        #: (timestamp, heading before the GNSS alignment)
+        self._headings: deque[tuple[int, float]] = deque()
+        self._last_turn_time: int | None = None
+        self._new_alignment_samples = False
         #: set when a calibration changed, cleared once it has been saved
         self.calibration_changed = False
         #: rate of turn in rad/s of the latest IMU sample
@@ -243,6 +264,45 @@ class CompassProcessor:
     def add_position(self, position: PositionData) -> None:
         """Add a GNSS fix."""
         self.turn.add_position(position)
+        if self.settings.gnss_alignment:
+            self._align(position)
+
+    def _align(self, position: PositionData) -> None:
+        # differences collected before the calibration has converged would stay in
+        # the alignment for a long time
+        if self.settings.continuous_calibration and not self.calibrated:
+            return
+        if (
+            not position.valid
+            or position.source not in (None, "NAV-PVT")
+            or position.speed < self.settings.min_alignment_speed
+            or (
+                position.speed_accuracy is not None
+                and position.speed_accuracy > 0.2 * position.speed
+            )
+            or self._last_turn_time is None
+            or position.timestamp - self._last_turn_time < _STRAIGHT_FOR_MS
+        ):
+            return
+        heading = self._heading_at(position.timestamp)
+        if heading is None:
+            return
+        if position.velocity_north is not None and position.velocity_east is not None:
+            course = math.atan2(position.velocity_east, position.velocity_north)
+        else:
+            course = math.radians(position.true_course)
+        self.alignment.add_sample(heading + self.settings.bow_angle, course)
+        self._new_alignment_samples = True
+
+    def _heading_at(self, timestamp: int) -> float | None:
+        best = min(
+            self._headings,
+            key=lambda entry: abs(entry[0] - timestamp),
+            default=None,
+        )
+        if best is None or abs(best[0] - timestamp) > _MAX_HEADING_TIME_OFFSET_MS:
+            return None
+        return best[1]
 
     def _boat_acceleration(self, sample: ImuSample) -> Vector3:
         heading = self.heading.heading_at(sample.timestamp)
@@ -263,6 +323,11 @@ class CompassProcessor:
         if self.attitude.initialized:
             self._rate = self.attitude.heading_rate(sample)
             self.heading.predict(sample.timestamp, self._rate)
+            if (
+                self._last_turn_time is None
+                or abs(self._rate) > self.settings.max_alignment_rate
+            ):
+                self._last_turn_time = sample.timestamp
 
     @property
     def calibrated(self) -> bool:
@@ -285,7 +350,9 @@ class CompassProcessor:
         if timestamp - self._last_fit_time < self.settings.refit_interval_ms:
             return False
         self._last_fit_time = timestamp
-        changed = False
+        # save the alignment along with the calibration
+        changed = self._new_alignment_samples
+        self._new_alignment_samples = False
         if self.settings.continuous_calibration:
             for channel in self.channels:
                 changed = channel.calibration.refit() or changed
@@ -319,8 +386,14 @@ class CompassProcessor:
         heading = self.heading.heading_at(sample.timestamp)
         if heading is None:
             return None
+        unaligned = (heading + self.settings.declination) % math.tau
+        self._headings.append((sample.timestamp, unaligned))
+        while self._headings[0][0] < sample.timestamp - _HEADING_HISTORY_MS:
+            self._headings.popleft()
+
+        offset = self.alignment.offset if self.settings.gnss_alignment else None
         return HeadingData(
-            heading=(heading + self.settings.declination) % math.tau,
+            heading=unaligned if offset is None else (unaligned + offset) % math.tau,
             timestamp=sample.timestamp,
         )
 
@@ -357,6 +430,7 @@ class CompassProcessor:
         return {
             "version": 1,
             "magnetometers": [channel.state_dict() for channel in self.channels],
+            "alignment": self.alignment.state_dict(),
         }
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
@@ -367,6 +441,8 @@ class CompassProcessor:
         for channel in self.channels:
             if channel.name in stored:
                 channel.load_state_dict(stored[channel.name])
+        if "alignment" in state:
+            self.alignment.load_state_dict(state["alignment"])
 
     def save(self, path: str | Path) -> None:
         write_json_atomically(path, self.state_dict())
@@ -453,6 +529,8 @@ def create_processor() -> CompassProcessor:
         CompassSettings(
             declination=math.radians(magnetometer_config.DECLINATION_DEGREES),
             continuous_calibration=magnetometer_config.CONTINUOUS_CALIBRATION,
+            gnss_alignment=magnetometer_config.GNSS_ALIGNMENT,
+            bow_angle=math.radians(magnetometer_config.BOW_ANGLE_DEGREES),
         ),
     )
     processor.load(magnetometer_config.CALIBRATION_FILE)

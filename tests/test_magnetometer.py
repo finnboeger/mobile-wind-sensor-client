@@ -98,6 +98,8 @@ def _config(devices: list[str]) -> config.MagnetometerConfig:
         BENCH_CALIBRATION_FILE="{sensor}.json",
         CONTINUOUS_CALIBRATION=True,
         CALIBRATION_FILE="compass.json",
+        GNSS_ALIGNMENT=True,
+        BOW_ANGLE_DEGREES=0,
     )
 
 
