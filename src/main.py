@@ -7,6 +7,7 @@ from queue import Queue
 import aggregate
 import dashboard
 import gps
+import imu
 import mqtt
 import nmea
 import wind
@@ -86,6 +87,8 @@ if __name__ == "__main__":
         aggregate.init(aggregate_position_queue, aggregate_wind_queue, second_consumers)
 
     gps.init(position_output_queues)
+    # The IMU samples are only logged for now
+    imu.init([])
     n2k_node, heading_queue, wind_queue = nmea.init()
 
     # Forward the GPS data to the NMEA2000 network
