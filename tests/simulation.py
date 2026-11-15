@@ -176,6 +176,8 @@ class RibCourse:
     current: tuple[float, float] = (0.0, 0.0)
     roll_amplitude: float = math.radians(6)
     pitch_amplitude: float = math.radians(4)
+    #: length of the last straight run, the same as the others if None
+    final_straight_time: float | None = None
     #: (start time, start heading in rad, heading rate in rad/s, end time)
     segments: list[tuple[float, float, float, float]] = field(default_factory=list)
 
@@ -188,8 +190,11 @@ class RibCourse:
             self.segments.append((time, heading, rate, time + turn_time))
             time += turn_time
             heading = math.radians(target)
-            self.segments.append((time, heading, 0.0, time + self.straight_time))
-            time += self.straight_time
+            straight_time = self.straight_time
+            if target is self.targets[-1] and self.final_straight_time is not None:
+                straight_time = self.final_straight_time
+            self.segments.append((time, heading, 0.0, time + straight_time))
+            time += straight_time
 
     @property
     def duration(self) -> float:
