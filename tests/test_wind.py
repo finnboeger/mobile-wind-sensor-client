@@ -110,3 +110,32 @@ def test_heading_at_prefers_the_gyro_aided_heading() -> None:
     assert current == HeadingData(heading=0.0, timestamp=0)
     assert abs(math.degrees(wind.heading_at(motion, 1000, current)) - 20) < 1
     assert wind.heading_at(None, 1000, current) == 0.0
+
+
+def test_gps_antenna_sway_is_removed() -> None:
+    motion = UnitMotion(gps_antenna_position=(0.0, 0.0, -1.0))
+    motion.add(
+        [
+            ImuSample(
+                timestamp=i * 10,
+                acceleration=(0.0, 0.0, -9.80665),
+                angular_rate=(0.2, 0.0, 0.0),
+            )
+            for i in range(101)
+        ],
+        [HeadingData(heading=0.0, timestamp=0)],
+    )
+    sway = motion.lever_arm_velocity(1000, (0.0, 0.0, -1.0))
+    assert sway.y > 0.19
+
+    position_queue: Queue[PositionData] = Queue()
+    position_queue.put(_position(1000, velocity_north=3.0, velocity_east=sway.y))
+    velocities, _ = wind.read_position_queue(position_queue, None, None, motion)
+    assert abs(velocities[0].x - 3.0) < 1e-6
+    assert abs(velocities[0].y) < 1e-6
+
+    assert wind.sensor_velocity(None, 1000, velocities[0]) == velocities[0]
+    # a wind sensor next to the antenna sways the same way
+    motion.wind_sensor_position = (0.0, 0.0, -1.0)
+    sensor = wind.sensor_velocity(motion, 1000, velocities[0])
+    assert abs(sensor.y - sway.y) < 1e-6
