@@ -253,3 +253,101 @@ def test_gnss_speed_removes_the_turn_from_the_attitude() -> None:
     # each turn tilts the attitude towards the outside, 2.6 times that in the heading
     assert max(abs(e) for e in without_gnss) > 5
     assert max(abs(e) for e in with_gnss) < 1.5
+
+
+def test_continuous_calibration_needs_coverage() -> None:
+    calibration = compass_calibration.ContinuousCalibration()
+    radius = EARTH_FIELD[0]
+    # a quarter circle is not enough
+    for i in range(500):
+        angle = math.radians(i * 90 / 500)
+        calibration.add_sample(
+            3 + radius * math.cos(angle),
+            -2 + radius * math.sin(angle),
+        )
+    assert not calibration.refit()
+
+    for i in range(2000):
+        angle = math.radians(i * 360 / 2000)
+        calibration.add_sample(
+            3 + radius * math.cos(angle),
+            -2 + radius * math.sin(angle),
+        )
+    assert calibration.refit()
+    offset = calibration.calibration.offset
+    assert abs(offset[0] - 3) < 0.1
+    assert abs(offset[1] + 2) < 0.1
+
+
+#: a RIB going around for about ten minutes
+RIB = RibCourse(
+    targets=[0, 90, 200, 300, 45, 160, 250, 330, 120, 20, 270, 180, 0],
+    current=(0.3, -0.4),
+)
+#: iron of the boat near the unit
+BOAT_IRON = Magnetometer(
+    hard_iron=(6.0, -4.0, 2.0),
+    soft_iron=[[1.04, 0.02, 0.0], [0.02, 0.97, 0.0], [0.0, 0.0, 1.0]],
+    noise=0.05,
+)
+
+
+def _run_rib(
+    processor: compass.CompassProcessor,
+    magnetometers: list[Magnetometer],
+    course: RibCourse = RIB,
+) -> list[float]:
+    """Return the heading errors in degrees in the last two minutes."""
+    imu_samples, magnetometer_samples = simulate(
+        course.attitude,
+        course.duration,
+        magnetometers=magnetometers,
+        boat_acceleration=course.acceleration,
+        gyro_bias=(math.radians(0.2), math.radians(-0.1), math.radians(0.3)),
+    )
+    return _errors(
+        processor,
+        imu_samples,
+        magnetometer_samples,
+        course.heading,
+        after=course.duration - 120,
+        positions=course.positions(),
+    )
+
+
+def _rms(values: list[float]) -> float:
+    return math.sqrt(sum(v * v for v in values) / len(values))
+
+
+def test_continuous_calibration_learns_the_boat_iron() -> None:
+    processor = compass.CompassProcessor({"sensor": None})
+    errors = _run_rib(processor, [BOAT_IRON])
+    assert processor.calibrated
+    assert _rms(errors) < 2
+    assert max(abs(e) for e in errors) < 4
+
+    uncalibrated = _run_rib(
+        compass.CompassProcessor(
+            {"sensor": None},
+            compass.CompassSettings(continuous_calibration=False),
+        ),
+        [BOAT_IRON],
+    )
+    assert max(abs(e) for e in uncalibrated) > 15
+
+
+def test_calibration_state_round_trip(tmp_path: Path) -> None:
+    processor = compass.CompassProcessor({"sensor": None})
+    _run_rib(processor, [BOAT_IRON])
+    path = tmp_path / "compass.json"
+    processor.save(path)
+    assert not processor.calibration_changed
+
+    restored = compass.CompassProcessor({"sensor": None})
+    restored.load(path)
+    assert (
+        restored.channels[0].calibration.calibration
+        == processor.channels[0].calibration.calibration
+    )
+    # a missing file starts a new calibration
+    compass.CompassProcessor({"sensor": None}).load(tmp_path / "missing.json")
