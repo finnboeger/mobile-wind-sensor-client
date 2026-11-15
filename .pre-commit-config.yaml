@@ -30,6 +30,8 @@ repos:
     hooks:
     -   id: bandit
         args: ["-c", "pyproject.toml"]
+        # the tests use seeded pseudo-random numbers for simulated sensor data
+        exclude: ^tests/
 #-   repo: local
 #    hooks:
 #    -   id: pytest
